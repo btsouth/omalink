@@ -26,6 +26,8 @@ account or cloud relay.
 - Send the desktop clipboard to the phone
 - Send text or links to the phone
 - Ring a misplaced phone
+- Now-playing media controls for the phone: track, artist, and album art with
+  play/pause, previous/next, seek, and volume
 - Native colors and typography across Omarchy themes
 - Memory-only message cache that is cleared when the message window closes
 
@@ -65,6 +67,15 @@ Connect.
 
 Message history is requested from the phone when needed. OmaLink does not add
 its own cloud service or persistent message database.
+
+## Media controls
+
+OmaLink shows the phone's active media player in the panel with play/pause,
+previous/next, seek, and volume. It reads KDE Connect's mprisremote plugin,
+which emits no change signals, so the panel's regular polling (every 3
+seconds while open) drives the display. If the section never appears, check
+that media control is enabled for this computer in the KDE Connect app on
+the phone.
 
 ## Notification popups
 

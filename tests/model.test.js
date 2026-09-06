@@ -12,6 +12,22 @@ assert.equal(model.connectivityText({ connectivity: { strength: 3, type: "5G" } 
 assert.equal(model.signalStrength({ connectivity: { strength: 3, type: "5G" } }), 3)
 assert.equal(model.signalStrength({ connectivity: { strength: 4, type: "5G" } }), 4)
 assert.equal(model.signalStrength({}), -1)
+assert.equal(model.hasMedia({}), false)
+assert.equal(model.hasMedia({ media: null }), false)
+assert.equal(model.hasMedia({ media: {} }), false)
+assert.equal(model.hasMedia({ media: { player: "Apple Music" } }), true)
+assert.equal(model.hasMedia({ media: { title: "Overthinking" } }), true)
+assert.equal(model.mediaTitle({ title: "Overthinking", player: "Apple Music" }), "Overthinking")
+assert.equal(model.mediaTitle({ title: "", player: "Apple Music" }), "Apple Music")
+assert.equal(model.mediaTitle(null), "")
+assert.equal(model.mediaSubtitle({ artist: "usedcvnt", album: "Ultraviolet" }), "usedcvnt · Ultraviolet")
+assert.equal(model.mediaSubtitle({ artist: "usedcvnt" }), "usedcvnt")
+assert.equal(model.mediaSubtitle({}), "")
+assert.equal(model.mediaTime(144023), "2:24")
+assert.equal(model.mediaTime(65000), "1:05")
+assert.equal(model.mediaTime(0), "0:00")
+assert.equal(model.mediaTime(-500), "0:00")
+assert.equal(model.mediaTime(null), "0:00")
 assert.equal(model.visibleNotifications([
   { appName: "Spotify", isConversation: false },
   { appName: "Messages", isConversation: true }

@@ -48,6 +48,31 @@ function signalStrength(device) {
   return isFinite(strength) && strength >= 0 ? Math.floor(strength) : -1
 }
 
+function hasMedia(device) {
+  if (!device || !device.media || typeof device.media !== "object") return false
+  return String(device.media.title || "") !== "" || String(device.media.player || "") !== ""
+}
+
+function mediaTitle(media) {
+  if (!media) return ""
+  return String(media.title || media.player || "")
+}
+
+function mediaSubtitle(media) {
+  if (!media) return ""
+  var parts = []
+  if (media.artist) parts.push(String(media.artist))
+  if (media.album) parts.push(String(media.album))
+  return parts.join(" · ")
+}
+
+function mediaTime(milliseconds) {
+  var totalSeconds = Math.max(0, Math.round((Number(milliseconds) || 0) / 1000))
+  var minutes = Math.floor(totalSeconds / 60)
+  var seconds = totalSeconds % 60
+  return minutes + ":" + (seconds < 10 ? "0" : "") + seconds
+}
+
 function visibleNotifications(notifications) {
   if (!Array.isArray(notifications)) return []
   return notifications.filter(function(notification) {
@@ -349,6 +374,10 @@ if (typeof module !== "undefined") {
     batteryText: batteryText,
     connectivityText: connectivityText,
     signalStrength: signalStrength,
+    hasMedia: hasMedia,
+    mediaTitle: mediaTitle,
+    mediaSubtitle: mediaSubtitle,
+    mediaTime: mediaTime,
     visibleNotifications: visibleNotifications,
     filterConversations: filterConversations,
     parseContacts: parseContacts,

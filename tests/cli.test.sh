@@ -46,6 +46,9 @@ if [[ " $* " == *" monitor "* ]]; then
   sleep 3
   exit 0
 fi
+if [[ " $* " == *" sendAction "* ]]; then echo "sendAction $*" >>"$0.log"; exit 0; fi
+if [[ " $* " == *" Set ssv "* ]]; then echo "setVolume $*" >>"$0.log"; exit 0; fi
+if [[ " $* " == *"mprisremote seek "* ]]; then echo "seek $*" >>"$0.log"; exit 0; fi
 case "${*: -1}" in
   charge) printf '%s\n' 'i 71' ;;
   isCharging) printf '%s\n' 'b false' ;;
@@ -63,6 +66,23 @@ case "${*: -1}" in
       printf '%s\n' '{"type":"av","data":[[{"type":"(isa(s)xiixixa(xsss))","data":[1,"Newest",[["+15550000001"]],2000,1,0,7,10,-1,[[42,"image/jpeg","VGh1bWI=","PART_1.jpeg"]]]},{"type":"(isa(s)xiixixa(xsss))","data":[1,"Older",[["+15550000002"]],1000,2,1,8,11,-1,[]]}]]}'
     fi
     ;;
+  playerList)
+    if [[ " $* " == *"/def456/"* ]]; then
+      printf '%s\n' '{"type":"as","data":[]}'
+    else
+      printf '%s\n' '{"type":"as","data":["Apple Music"]}'
+    fi
+    ;;
+  title) printf '%s\n' 's "Overthinking"' ;;
+  artist) printf '%s\n' 's "usedcvnt"' ;;
+  album) printf '%s\n' 's "Ultraviolet"' ;;
+  player) printf '%s\n' 's "Apple Music"' ;;
+  localAlbumArtUrl) printf '%s\n' 's "file:///tmp/art.jpg"' ;;
+  volume) printf '%s\n' 'i 40' ;;
+  length) printf '%s\n' 'i 144023' ;;
+  position) printf '%s\n' 'i 94844' ;;
+  isPlaying) printf '%s\n' 'b true' ;;
+  canSeek) printf '%s\n' 'b true' ;;
   *) exit 1 ;;
 esac
 EOF
@@ -106,6 +126,18 @@ EOF
 
 status="$(PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" status)"
 jq -e '.installed == true and (.devices | length) == 2 and .devices[0].name == "Pixel 9" and .devices[0].battery.charge == 71 and .devices[0].connectivity.type == "5G"' <<<"$status" >/dev/null
+jq -e '.devices[0].media == {player: "Apple Music", title: "Overthinking", artist: "usedcvnt", album: "Ultraviolet", volume: 40, length: 144023, position: 94844, isPlaying: true, canSeek: true, albumArt: "file:///tmp/art.jpg", players: ["Apple Music"]}' <<<"$status" >/dev/null
+jq -e '.devices[1].media == null' <<<"$status" >/dev/null
+media="$(PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" media abc123)"
+jq -e '.title == "Overthinking" and .artist == "usedcvnt" and .players == ["Apple Music"]' <<<"$media" >/dev/null
+[[ "$(PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" media def456)" == "null" ]]
+: >"$temp_dir/busctl.log"
+PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" media-action abc123 PlayPause >/dev/null
+PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" media-volume abc123 65 >/dev/null
+PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" media-seek abc123 100000 >/dev/null
+grep -q 'sendAction .*PlayPause' "$temp_dir/busctl.log"
+grep -q 'setVolume .*volume i 65' "$temp_dir/busctl.log"
+grep -q 'seek .*i 5156' "$temp_dir/busctl.log"
 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" ring abc123 >/dev/null
 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" clipboard abc123 >/dev/null
 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" share abc123 "hello phone" >/dev/null
@@ -149,6 +181,30 @@ if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" notify-reply abc123 'bad
 fi
 if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment abc123 notanumber PART_1.jpeg >/dev/null 2>&1; then
   echo "invalid attachment part id was accepted" >&2
+  exit 1
+fi
+if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" media '../bad' >/dev/null 2>&1; then
+  echo "invalid media device id was accepted" >&2
+  exit 1
+fi
+if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" media-action abc123 Disco >/dev/null 2>&1; then
+  echo "invalid media action was accepted" >&2
+  exit 1
+fi
+if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" media-volume abc123 101 >/dev/null 2>&1; then
+  echo "out-of-range media volume was accepted" >&2
+  exit 1
+fi
+if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" media-volume abc123 abc >/dev/null 2>&1; then
+  echo "non-numeric media volume was accepted" >&2
+  exit 1
+fi
+if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" media-seek abc123 -5 >/dev/null 2>&1; then
+  echo "negative media seek was accepted" >&2
+  exit 1
+fi
+if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" media-seek def456 1000 >/dev/null 2>&1; then
+  echo "media seek without media was accepted" >&2
   exit 1
 fi
 

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: omalink <status|watch|ring|clipboard|share|dismiss|dismiss-all|notify-reply|contacts|conversations|messages|attachment|attachment-save|reply|sms|seen|mark-seen> [arguments]" >&2
+  echo "Usage: omalink <status|watch|media|media-action|media-volume|media-seek|ring|clipboard|share|dismiss|dismiss-all|notify-reply|contacts|conversations|messages|attachment|attachment-save|reply|sms|seen|mark-seen> [arguments]" >&2
   exit 2
 }
 
@@ -28,6 +28,7 @@ status() {
     network_strength="$(dbus_property "$device_path/connectivity_report" org.kde.kdeconnect.device.connectivity_report cellularNetworkStrength i)"
     network_type="$(dbus_property "$device_path/connectivity_report" org.kde.kdeconnect.device.connectivity_report cellularNetworkType s)"
     notifications="$(notification_json "$device_path")"
+    media="$(media_json "$device_path")"
     devices+=("$(jq -cn \
       --arg id "$id" \
       --arg name "$name" \
@@ -36,7 +37,8 @@ status() {
       --argjson networkStrength "${network_strength:-null}" \
       --arg networkType "${network_type:-}" \
       --argjson notifications "${notifications:-[]}" \
-      '{id: $id, name: $name, battery: {charge: $charge, charging: $charging}, connectivity: {strength: $networkStrength, type: $networkType}, notifications: $notifications}')")
+      --argjson media "${media:-null}" \
+      '{id: $id, name: $name, battery: {charge: $charge, charging: $charging}, connectivity: {strength: $networkStrength, type: $networkType}, notifications: $notifications, media: $media}')")
   done <<<"$raw"
 
   if (( ${#devices[@]} == 0 )); then
@@ -103,6 +105,47 @@ dbus_property() {
   fi
 }
 
+# The phone's current media state as reported by KDE Connect's mprisremote
+# plugin, or null when nothing is playing (or the plugin interface is gone,
+# e.g. the phone has not granted media control permissions).
+media_json() {
+  local device_path="$1" mpris_path="$1/mprisremote" raw player_list
+  local player title artist album volume length position is_playing can_seek album_art
+  raw="$(busctl --user --json=short get-property org.kde.kdeconnect "$mpris_path" \
+    org.kde.kdeconnect.device.mprisremote playerList 2>/dev/null || true)"
+  player_list="$(jq -c '.data // []' <<<"$raw" 2>/dev/null || true)"
+  if [[ -z $player_list || $player_list == "[]" ]]; then
+    printf 'null\n'
+    return
+  fi
+  player="$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote player s)"
+  title="$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote title s)"
+  artist="$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote artist s)"
+  album="$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote album s)"
+  volume="$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote volume i)"
+  length="$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote length i)"
+  position="$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote position i)"
+  is_playing="$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote isPlaying b)"
+  can_seek="$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote canSeek b)"
+  album_art="$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote localAlbumArtUrl s)"
+  jq -cn \
+    --arg player "$player" \
+    --arg title "$title" \
+    --arg artist "$artist" \
+    --arg album "$album" \
+    --argjson volume "${volume:-0}" \
+    --argjson length "${length:-0}" \
+    --argjson position "${position:-0}" \
+    --argjson isPlaying "${is_playing:-false}" \
+    --argjson canSeek "${can_seek:-false}" \
+    --arg albumArt "${album_art:-}" \
+    --argjson players "$player_list" \
+    '{player: $player, title: $title, artist: $artist, album: $album,
+      volume: $volume, length: $length,
+      position: (if $position < 0 then 0 else $position end),
+      isPlaying: $isPlaying, canSeek: $canSeek, albumArt: $albumArt, players: $players}'
+}
+
 ring() {
   local device_id="${1:-}"
   [[ -n $device_id ]] || usage
@@ -135,6 +178,50 @@ share_text() {
   else
     kdeconnect-cli --device "$device_id" --share-text "$value"
   fi
+}
+
+media() {
+  local device_id="${1:-}"
+  [[ $device_id =~ ^[A-Za-z0-9]+$ ]] || usage
+  media_json "/modules/kdeconnect/devices/$device_id"
+}
+
+# The Android side interprets these standard MPRIS action names. The full set
+# is allowed at the CLI boundary; the panel currently sends only PlayPause,
+# Previous, and Next.
+media_action() {
+  local device_id="${1:-}" action="${2:-}"
+  [[ $device_id =~ ^[A-Za-z0-9]+$ && $action =~ ^(PlayPause|Play|Pause|Next|Previous|Stop|Rewind|FastForward)$ ]] || usage
+  busctl --user call org.kde.kdeconnect "/modules/kdeconnect/devices/$device_id/mprisremote" \
+    org.kde.kdeconnect.device.mprisremote sendAction s "$action" >/dev/null
+}
+
+media_volume() {
+  local device_id="${1:-}" volume="${2:-}"
+  [[ $device_id =~ ^[A-Za-z0-9]+$ && $volume =~ ^[0-9]+$ && $volume -ge 0 && $volume -le 100 ]] || usage
+  busctl --user call org.kde.kdeconnect "/modules/kdeconnect/devices/$device_id/mprisremote" \
+    org.freedesktop.DBus.Properties Set ssv \
+    org.kde.kdeconnect.device.mprisremote volume i "$volume" >/dev/null
+}
+
+# Seek to an absolute position (milliseconds). The plugin only exposes a
+# relative seek, so the offset is computed from the live position here.
+media_seek() {
+  local device_id="${1:-}" target="${2:-}" mpris_path position offset
+  [[ $device_id =~ ^[A-Za-z0-9]+$ && $target =~ ^[0-9]+$ ]] || usage
+  mpris_path="/modules/kdeconnect/devices/$device_id/mprisremote"
+  [[ $(media_json "$mpris_path") != null ]] || {
+    echo "No media is playing on the phone" >&2
+    exit 1
+  }
+  position="$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote position i)"
+  [[ -n $position ]] || {
+    echo "No media is playing on the phone" >&2
+    exit 1
+  }
+  offset=$((target - position))
+  busctl --user call org.kde.kdeconnect "$mpris_path" \
+    org.kde.kdeconnect.device.mprisremote seek i "$offset" >/dev/null
 }
 
 dismiss_notification() {
@@ -528,6 +615,10 @@ send_sms() {
 case "${1:-}" in
   status) status ;;
   watch) watch ;;
+  media) shift; media "${1:-}" ;;
+  media-action) shift; media_action "${1:-}" "${2:-}" ;;
+  media-volume) shift; media_volume "${1:-}" "${2:-}" ;;
+  media-seek) shift; media_seek "${1:-}" "${2:-}" ;;
   ring) shift; ring "${1:-}" ;;
   clipboard) shift; send_clipboard "${1:-}" ;;
   share) shift; share_text "${1:-}" "${2:-}" ;;
