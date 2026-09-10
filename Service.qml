@@ -97,6 +97,26 @@ Item {
     if (installed) Quickshell.execDetached(["kdeconnect-app"])
   }
 
+  // Media actions are fire-and-forget: the panel refreshes its media state on
+  // the process exit and from its regular polling, so no status text needed.
+  function mediaAction(deviceId, action) {
+    if (!deviceId || !action || mediaProcess.running) return
+    mediaProcess.command = [helperPath, "media-action", String(deviceId), String(action)]
+    mediaProcess.running = true
+  }
+
+  function mediaVolume(deviceId, volume) {
+    if (!deviceId || mediaProcess.running) return
+    mediaProcess.command = [helperPath, "media-volume", String(deviceId), String(Math.round(Number(volume) || 0))]
+    mediaProcess.running = true
+  }
+
+  function mediaSeek(deviceId, position) {
+    if (!deviceId || mediaProcess.running) return
+    mediaProcess.command = [helperPath, "media-seek", String(deviceId), String(Math.round(Number(position) || 0))]
+    mediaProcess.running = true
+  }
+
   Timer {
     interval: (root.panelOpen ? 3 : root.refreshIntervalSec) * 1000
     repeat: true
@@ -145,5 +165,10 @@ Item {
       clearActionStatus.restart()
       root.refresh()
     }
+  }
+
+  Process {
+    id: mediaProcess
+    onExited: root.refresh()
   }
 }
