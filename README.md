@@ -9,7 +9,9 @@ account or cloud relay.
 ## Features
 
 - Connected phone, battery, charging state, network type, and signal strength
-- Android notifications with dismissal on the phone, one by one or all at once
+- SMS/MMS/RCS and authenticator notifications with dismissal on the phone
+- Notification sources you can tune, and popups you can turn off while keeping
+  the list in the panel
 - Notification popups that open the OmaLink panel on click, with message
   contents always hidden in popups (read them in the panel instead)
 - Unread text messages readable directly in the panel, even when the phone
@@ -75,7 +77,14 @@ previous/next, seek, and volume. It reads KDE Connect's mprisremote plugin,
 which emits no change signals, so the panel's regular polling (every 3
 seconds while open) drives the display. If the section never appears, check
 that media control is enabled for this computer in the KDE Connect app on
-the phone.
+the phone. **Media controls** can be set to Off in the widget settings to hide
+the section entirely.
+
+OmaLink does not send desktop playback to the phone. If a media bar appears on
+your phone while something plays on the computer, that is KDE Connect's
+Multimedia control plugin. Turn it off in the KDE Connect app on the phone:
+tap this computer, open its plugin settings, and disable **Multimedia
+control**.
 
 ## Notification popups
 
@@ -85,6 +94,21 @@ when clicked, so OmaLink silences that single popup event (by writing an
 its own popups instead. Clicking an OmaLink popup opens the OmaLink panel.
 Popups for messages never include the message contents; the panel and the
 Messages window show them.
+
+By default OmaLink only reads notifications from Android messaging apps,
+WhatsApp, Microsoft Authenticator, and Google Authenticator. Change
+**Notification sources** in the widget settings to add or remove apps
+(comma-separated names or Android packages matched anywhere in the app name or
+package), or clear the field to allow every notification. **Notification
+popups** can be set to Off to keep matching notifications listed in the panel
+without desktop popups.
+
+## Settings
+
+Widget settings live in the bar widget configuration: **Refresh interval**,
+**Notification sources**, **Notification popups**, and **Media controls**.
+OmaLink stores no message data: the conversation cache lives in memory and is
+dropped when the Messages window closes.
 
 ## Development
 
@@ -102,7 +126,6 @@ The test suite uses mock phone data and does not send messages.
 
 - Guided setup and permission diagnostics
 - File sending
-- Notification replies
 - Event-driven message and media updates
 
 ## License

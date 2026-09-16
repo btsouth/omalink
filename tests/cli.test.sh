@@ -56,8 +56,40 @@ case "${*: -1}" in
   cellularNetworkType) printf '%s\n' 's "5G"' ;;
   dismiss) echo "dismiss $*" >>"$0.log"; exit 0 ;;
   requestAllConversationThreads) : >"$0.requested"; exit 0 ;;
+  appName)
+    if [[ " $* " == *"notif.3"* || " $* " == *"notif.10"* ]]; then
+      printf '%s\n' '{"type":"s","data":"Visual Voicemail"}'
+    elif [[ " $* " == *"notif.4"* || " $* " == *"notif.11"* ]]; then
+      printf '%s\n' '{"type":"s","data":"Authenticator"}'
+    else
+      printf '%s\n' '{"type":"s","data":"Messages"}'
+    fi
+    ;;
+  internalId)
+    if [[ " $* " == *"notif.3"* || " $* " == *"notif.10"* ]]; then
+      printf '%s\n' '{"type":"s","data":"0|com.samsung.vvm|1|null|1"}'
+    elif [[ " $* " == *"notif.4"* || " $* " == *"notif.11"* ]]; then
+      printf '%s\n' '{"type":"s","data":"0|com.azure.authenticator|1|null|1"}'
+    else
+      printf '%s\n' '{"type":"s","data":"0|com.google.android.apps.messaging|1|null|1"}'
+    fi
+    ;;
+  isConversation)
+    if [[ " $* " == *"notif.3"* || " $* " == *"notif.4"* || " $* " == *"notif.10"* || " $* " == *"notif.11"* ]]; then
+      printf '%s\n' '{"type":"b","data":false}'
+    else
+      printf '%s\n' '{"type":"b","data":true}'
+    fi
+    ;;
+  silent)
+    if [[ " $* " == *"/notifications/notif.10 "* ]]; then
+      printf '%s\n' '{"type":"b","data":true}'
+    else
+      printf '%s\n' '{"type":"b","data":false}'
+    fi
+    ;;
   activeNotifications)
-    printf '%s\n' '{"type":"as","data":[["notif.1","notif.2"]]}'
+    printf '%s\n' '{"type":"as","data":[["notif.1","notif.2","notif.3","notif.4"]]}'
     ;;
   activeConversations)
     if [[ -n ${COLD_CONVERSATION_CACHE:-} && ! -e "$0.requested" ]]; then
@@ -92,6 +124,10 @@ cat >"$temp_dir/dbus-monitor" <<'EOF'
 #!/usr/bin/env bash
 printf 'signal time=1.0 sender=:1.5 -> destination=(null destination) serial=9 path=/modules/kdeconnect/devices/abc123/notifications; interface=org.kde.kdeconnect.device.notifications; member=notificationPosted\n'
 printf '   string "notif.9"\n'
+printf 'signal time=1.1 sender=:1.5 -> destination=(null destination) serial=10 path=/modules/kdeconnect/devices/abc123/notifications; interface=org.kde.kdeconnect.device.notifications; member=notificationPosted\n'
+printf '   string "notif.10"\n'
+printf 'signal time=1.2 sender=:1.5 -> destination=(null destination) serial=11 path=/modules/kdeconnect/devices/abc123/notifications; interface=org.kde.kdeconnect.device.notifications; member=notificationPosted\n'
+printf '   string "notif.11"\n'
 EOF
 chmod +x "$temp_dir/dbus-monitor"
 
@@ -125,7 +161,11 @@ END:VCARD
 EOF
 
 status="$(PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" status)"
-jq -e '.installed == true and (.devices | length) == 2 and .devices[0].name == "Pixel 9" and .devices[0].battery.charge == 71 and .devices[0].connectivity.type == "5G"' <<<"$status" >/dev/null
+jq -e '.installed == true and (.devices | length) == 2 and .devices[0].name == "Pixel 9" and .devices[0].battery.charge == 71 and .devices[0].connectivity.type == "5G" and (.devices[0].notifications | length) == 3' <<<"$status" >/dev/null
+voicemail_status="$(PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --notify-apps "voicemail" status)"
+jq -e '(.devices[0].notifications | length) == 1 and .devices[0].notifications[0].appName == "Visual Voicemail"' <<<"$voicemail_status" >/dev/null
+all_status="$(PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --notify-apps "" status)"
+jq -e '(.devices[0].notifications | length) == 4' <<<"$all_status" >/dev/null
 jq -e '.devices[0].media == {player: "Apple Music", title: "Overthinking", artist: "usedcvnt", album: "Ultraviolet", volume: 40, length: 144023, position: 94844, isPlaying: true, canSeek: true, albumArt: "file:///tmp/art.jpg", players: ["Apple Music"]}' <<<"$status" >/dev/null
 jq -e '.devices[1].media == null' <<<"$status" >/dev/null
 media="$(PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" media abc123)"
@@ -145,7 +185,7 @@ PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" share abc123 "https://omali
 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" dismiss abc123 notification-1 >/dev/null
 : >"$temp_dir/busctl.log"
 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" dismiss-all abc123 >/dev/null
-[[ "$(grep -c '/notifications/notif\.' "$temp_dir/busctl.log")" == 2 ]]
+[[ "$(grep -c '/notifications/notif\.' "$temp_dir/busctl.log")" == 3 ]]
 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" reply abc123 7 "Test reply" >/dev/null
 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" notify-reply abc123 reply-uuid.1 "Quick reply" >/dev/null
 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" sms abc123 +15550000001 "New message" >/dev/null
@@ -223,11 +263,17 @@ if XDG_STATE_HOME="$temp_dir/state" PATH="$temp_dir:/usr/bin" "$project_dir/bin/
 fi
 
 watch_out="$(XDG_RUNTIME_DIR="$temp_dir" XDG_CONFIG_HOME="$temp_dir/xdg" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" watch)"
-[[ $watch_out == "posted abc123 notif.9" ]]
+[[ $watch_out == $'posted abc123 notif.9\nposted abc123 notif.10\nposted abc123 notif.11' ]]
 grep -q '^\[Event/notification\]$' "$temp_dir/xdg/kdeconnect.notifyrc"
 grep -q '^Action=$' "$temp_dir/xdg/kdeconnect.notifyrc"
 grep -q 'default=Open' "$temp_dir/notify-send.log"
+grep -q 'New message' "$temp_dir/notify-send.log"
+[[ "$(grep -c '^notify ' "$temp_dir/notify-send.log")" == 2 ]]
 grep -q 'ipc call omalink.phone.DP-9 open' "$temp_dir/qs.log"
+: >"$temp_dir/notify-send.log"
+quiet_out="$(XDG_RUNTIME_DIR="$temp_dir" XDG_CONFIG_HOME="$temp_dir/xdg" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" watch --popups off)"
+[[ $quiet_out == $'posted abc123 notif.9\nposted abc123 notif.10\nposted abc123 notif.11' ]]
+[[ ! -s "$temp_dir/notify-send.log" ]]
 if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" sms abc123 'bad;number' "Test" >/dev/null 2>&1; then
   echo "invalid SMS destination was accepted" >&2
   exit 1

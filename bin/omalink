@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: omalink <status|watch|media|media-action|media-volume|media-seek|ring|clipboard|share|dismiss|dismiss-all|notify-reply|contacts|conversations|messages|attachment|attachment-save|reply|sms|seen|mark-seen> [arguments]" >&2
+  echo "Usage: omalink [--notify-apps \"App, Package\"] [--popups on|off] <status|watch|media|media-action|media-volume|media-seek|ring|clipboard|share|dismiss|dismiss-all|notify-reply|contacts|conversations|messages|attachment|attachment-save|reply|sms|seen|mark-seen> [arguments]" >&2
   exit 2
 }
 
@@ -52,7 +52,7 @@ status() {
 
 notification_json() {
   local device_path="$1" notification_root="$1/notifications" raw notification_id notification_path
-  local app_name title text icon_path dismissable reply_id is_conversation
+  local app_name internal_id title text icon_path dismissable reply_id is_conversation
   local -a notifications=()
 
   raw="$(busctl --user --json=short call org.kde.kdeconnect "$notification_root" \
@@ -61,6 +61,8 @@ notification_json() {
     [[ $notification_id =~ ^[A-Za-z0-9._:-]+$ ]] || continue
     notification_path="$notification_root/$notification_id"
     app_name="$(dbus_json_property "$notification_path" appName)"
+    internal_id="$(dbus_json_property "$notification_path" internalId)"
+    notification_allowed "$app_name" "$internal_id" || continue
     title="$(dbus_json_property "$notification_path" title)"
     text="$(dbus_json_property "$notification_path" text)"
     icon_path="$(dbus_json_property "$notification_path" iconPath)"
@@ -84,6 +86,41 @@ notification_json() {
   else
     printf '%s\n' "${notifications[@]}" | jq -sc '.'
   fi
+}
+
+notification_allowed() {
+  local app_name="${1,,}" internal_id="${2:-}" package_name="" term
+  IFS='|' read -r _ package_name _ <<<"$internal_id"
+  package_name="${package_name,,}"
+
+  # --notify-apps wins when given, including an empty list (allow everything).
+  if [[ -n $NOTIFY_APPS_SET ]]; then
+    [[ -z ${NOTIFY_APPS//[[:space:]]/} ]] && return 0
+    local -a terms=()
+    IFS=',' read -ra terms <<<"$NOTIFY_APPS"
+    for term in "${terms[@]}"; do
+      term="${term,,}"
+      term="${term#"${term%%[![:space:]]*}"}"
+      term="${term%"${term##*[![:space:]]}"}"
+      [[ -n $term ]] || continue
+      [[ $app_name == *"$term"* || $package_name == *"$term"* ]] && return 0
+    done
+    return 1
+  fi
+
+  case "$package_name" in
+    com.google.android.apps.messaging|com.samsung.android.messaging|com.android.messaging|com.android.mms|com.azure.authenticator|com.google.android.apps.authenticator2|com.whatsapp)
+      return 0
+      ;;
+  esac
+
+  case "$app_name" in
+    messages|google\ messages|samsung\ messages|messaging|authenticator|microsoft\ authenticator|google\ authenticator|whatsapp)
+      return 0
+      ;;
+  esac
+
+  return 1
 }
 
 dbus_json_property() {
@@ -257,16 +294,22 @@ notify_escape() {
 }
 
 handle_posted() {
-  local device_id="$1" notification_id="$2" notification_path app_name title text is_conversation icon_path summary body action
+  local device_id="$1" notification_id="$2" notification_path app_name internal_id title text is_conversation icon_path silent summary body action
   [[ $device_id =~ ^[A-Za-z0-9]+$ && $notification_id =~ ^[A-Za-z0-9._:-]+$ ]] || return 0
   sleep 0.3
   notification_path="/modules/kdeconnect/devices/$device_id/notifications/$notification_id"
+  # On reconnect the phone re-sends every notification still in its shade and
+  # the daemon re-posts each one flagged silent. Only new ones get a popup.
+  silent="$(dbus_json_property "$notification_path" silent)"
+  [[ $silent == true ]] && return 0
+  [[ $NOTIFY_POPUPS == off ]] && return 0
   app_name="$(dbus_json_property "$notification_path" appName)"
+  internal_id="$(dbus_json_property "$notification_path" internalId)"
+  notification_allowed "$app_name" "$internal_id" || return 0
   title="$(dbus_json_property "$notification_path" title)"
   text="$(dbus_json_property "$notification_path" text)"
   is_conversation="$(dbus_json_property "$notification_path" isConversation)"
   icon_path="$(dbus_json_property "$notification_path" iconPath)"
-  [[ ${app_name,,} == spotify && $is_conversation != true ]] && return 0
   if [[ $is_conversation == true ]]; then
     summary="New message"
     body="Open OmaLink to read it"
@@ -307,6 +350,11 @@ watch() {
   # processes must not inherit the lock fd (9>&-) or a stray would keep it.
   exec 9>"${XDG_RUNTIME_DIR:-/tmp}/omalink-watch.lock"
   flock 9
+  # Holding the lock means no other watcher is alive, so any dbus-monitor
+  # still using our match rule is an orphan from a killed watcher (the shell
+  # kills the watcher on reload but cannot reach this grandchild). Reap them
+  # before spawning ours or they accumulate across shell restarts.
+  pkill -f "dbus-monitor --session type='signal',interface='org.kde.kdeconnect.device.notifications'" 2>/dev/null || true
   ensure_quiet_daemon_popups || true
   local line device_id="" notification_id
   while IFS= read -r line; do
@@ -338,14 +386,18 @@ notify_reply() {
 }
 
 dismiss_all_notifications() {
-  local device_id="${1:-}" notification_root raw notification_id
+  local device_id="${1:-}" notification_root raw notification_id notification_path app_name internal_id
   [[ $device_id =~ ^[A-Za-z0-9]+$ ]] || usage
   notification_root="/modules/kdeconnect/devices/$device_id/notifications"
   raw="$(busctl --user --json=short call org.kde.kdeconnect "$notification_root" \
     org.kde.kdeconnect.device.notifications activeNotifications 2>/dev/null || true)"
   while IFS= read -r notification_id; do
     [[ $notification_id =~ ^[A-Za-z0-9._:-]+$ ]] || continue
-    busctl --user call org.kde.kdeconnect "$notification_root/$notification_id" \
+    notification_path="$notification_root/$notification_id"
+    app_name="$(dbus_json_property "$notification_path" appName)"
+    internal_id="$(dbus_json_property "$notification_path" internalId)"
+    notification_allowed "$app_name" "$internal_id" || continue
+    busctl --user call org.kde.kdeconnect "$notification_path" \
       org.kde.kdeconnect.device.notifications.notification dismiss >/dev/null 2>&1 || true
   done < <(jq -r '.data[0][]?' <<<"$raw" 2>/dev/null)
 }
@@ -393,35 +445,38 @@ active_conversations_raw() {
 }
 
 conversations() {
-  local device_id="${1:-}" device_path contacts raw attempt count last_count=-1
+  local device_id="${1:-}" device_path contacts raw prev attempt count requested=0 settled=0
   [[ $device_id =~ ^[A-Za-z0-9]+$ ]] || usage
   device_path="/modules/kdeconnect/devices/$device_id"
   contacts="$(contact_records_json "$device_id")"
 
-  # A freshly started daemon has an empty conversation cache, and until the
-  # phone reconnects the conversations interface is missing entirely. Wait
-  # for the interface, ask the phone for the thread list once it is there,
-  # and keep polling until the conversation count settles.
+  # kdeconnectd never asks the phone for messages newer than its cache, so a
+  # text sent on the phone stays invisible until the phone happens to push
+  # it. Ask the phone to resend every thread's newest message on every
+  # listing. Until the phone reconnects to a freshly started daemon the
+  # conversations interface is missing entirely; wait for the interface,
+  # request once it is there, and return when the thread list has settled.
   raw="$(active_conversations_raw "$device_path" 2>/dev/null || true)"
-  count=0
-  [[ -z $raw ]] || count="$(jq '.data[0] | length' <<<"$raw")"
-  if (( count == 0 )); then
-    local requested=0
-    for attempt in $(seq 1 20); do
-      if [[ -n $raw && $requested == 0 ]]; then
-        busctl --user call org.kde.kdeconnect "$device_path" \
-          org.kde.kdeconnect.device.conversations requestAllConversationThreads \
-          >/dev/null 2>&1 || true
-        requested=1
+  for attempt in $(seq 1 20); do
+    if [[ -n $raw && $requested == 0 ]]; then
+      busctl --user call org.kde.kdeconnect "$device_path" \
+        org.kde.kdeconnect.device.conversations requestAllConversationThreads \
+        >/dev/null 2>&1 || true
+      requested=1
+    fi
+    sleep 0.5
+    prev="$raw"
+    raw="$(active_conversations_raw "$device_path" 2>/dev/null || true)"
+    if (( requested == 1 )) && [[ -n $raw ]]; then
+      count="$(jq '.data[0] | length' <<<"$raw")"
+      if (( count > 0 )) && [[ $raw == "$prev" ]]; then
+        settled=$((settled + 1))
+      else
+        settled=0
       fi
-      sleep 0.5
-      raw="$(active_conversations_raw "$device_path" 2>/dev/null || true)"
-      count=0
-      [[ -z $raw ]] || count="$(jq '.data[0] | length' <<<"$raw")"
-      if (( count > 0 && count == last_count )); then break; fi
-      last_count=$count
-    done
-  fi
+      (( settled >= 3 )) && break
+    fi
+  done
   if [[ -z $raw ]]; then
     echo "The phone connection is not ready yet" >&2
     exit 1
@@ -611,6 +666,19 @@ send_sms() {
   [[ $device_id =~ ^[A-Za-z0-9]+$ && $destination =~ ^[+0-9().[:space:]-]+$ && ${#digits} -ge 3 && -n $message ]] || usage
   kdeconnect-cli --device "$device_id" --send-sms "$message" --destination "$destination"
 }
+
+NOTIFY_APPS_SET=""
+NOTIFY_APPS=""
+NOTIFY_POPUPS="on"
+omalink_args=()
+while (( $# > 0 )); do
+  case $1 in
+    --notify-apps) NOTIFY_APPS_SET=1; NOTIFY_APPS="${2:-}"; shift 2 ;;
+    --popups) NOTIFY_POPUPS="${2:-on}"; shift 2 ;;
+    *) omalink_args+=("$1"); shift ;;
+  esac
+done
+set -- "${omalink_args[@]}"
 
 case "${1:-}" in
   status) status ;;

@@ -32,6 +32,15 @@ assert.equal(model.visibleNotifications([
   { appName: "Spotify", isConversation: false },
   { appName: "Messages", isConversation: true }
 ]).length, 1)
+const filterSamples = [
+  { appName: "Signal" },
+  { appName: "Messages" },
+  { appName: "Microsoft Authenticator" }
+]
+assert.equal(model.visibleNotifications(filterSamples, "signal").length, 1)
+assert.equal(model.visibleNotifications(filterSamples, "signal, authenticator").length, 2)
+assert.equal(model.visibleNotifications(filterSamples, "").length, 3)
+assert.equal(model.visibleNotifications(filterSamples, "  ").length, 3)
 const searchableConversations = [
   { names: ["Alex Rivera"], addresses: ["+15550000001"], preview: "Dinner tonight" },
   { names: ["Sam"], addresses: ["+15550000002"], preview: "Project update" }

@@ -22,7 +22,7 @@ Panel {
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property color iconColor: phone.connected ? foreground : dim
   readonly property var notifications: phone.devices.length > 0 && Array.isArray(phone.devices[0].notifications)
-    ? Model.visibleNotifications(phone.devices[0].notifications) : []
+    ? Model.visibleNotifications(phone.devices[0].notifications, phone.notifySources) : []
   property string shareDeviceId: ""
   property string shareDeviceName: ""
   property string notifReplyId: ""
@@ -301,7 +301,7 @@ Panel {
             // Compact by design: the header lives in the track-info column, and
             // the thin MediaBar sliders keep seek and volume to one line each.
             ColumnLayout {
-              visible: Model.hasMedia(modelData)
+              visible: phone.mediaControls && Model.hasMedia(modelData)
               Layout.fillWidth: true
               spacing: Style.space(4)
   

@@ -16,8 +16,18 @@ Item {
   property string actionSuccess: ""
 
   readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 15, 5, 300)
+  readonly property var notifySources: settings && settings["notifyApps"] !== undefined && settings["notifyApps"] !== null
+    ? String(settings["notifyApps"]) : undefined
+  readonly property string notifyPopups: String(setting("notifyPopups", "On")).toLowerCase() === "off" ? "off" : "on"
+  readonly property bool mediaControls: String(setting("mediaControls", "On")).toLowerCase() !== "off"
   readonly property string pluginDir: Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "").replace(/\/$/, "")
   readonly property string helperPath: pluginDir + "/bin/omalink"
+
+  function withNotify(command) {
+    var full = command.slice()
+    if (notifySources !== undefined) full = full.concat(["--notify-apps", notifySources])
+    return full.concat(["--popups", notifyPopups])
+  }
   readonly property bool connected: devices.length > 0
 
   function setting(name, fallback) {
@@ -34,7 +44,7 @@ Item {
   function refresh() {
     if (statusProcess.running) return
     refreshing = true
-    statusProcess.command = [helperPath, "status"]
+    statusProcess.command = withNotify([helperPath, "status"])
     statusProcess.running = true
   }
 
@@ -81,7 +91,7 @@ Item {
     if (!deviceId || actionProcess.running) return
     actionStatus = "Clearing notifications…"
     actionSuccess = "Notifications cleared"
-    actionProcess.command = [helperPath, "dismiss-all", String(deviceId)]
+    actionProcess.command = withNotify([helperPath, "dismiss-all", String(deviceId)])
     actionProcess.running = true
   }
 
@@ -134,7 +144,7 @@ Item {
 
   Process {
     id: watchProcess
-    command: [root.helperPath, "watch"]
+    command: root.withNotify([root.helperPath, "watch"])
     running: true
     stdout: SplitParser {
       onRead: root.refresh()

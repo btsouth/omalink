@@ -73,11 +73,17 @@ function mediaTime(milliseconds) {
   return minutes + ":" + (seconds < 10 ? "0" : "") + seconds
 }
 
-function visibleNotifications(notifications) {
+function visibleNotifications(notifications, sources) {
   if (!Array.isArray(notifications)) return []
+  var terms = null
+  if (typeof sources === "string") {
+    terms = sources.split(",").map(function(term) { return term.trim().toLowerCase() }).filter(function(term) { return term.length > 0 })
+  }
   return notifications.filter(function(notification) {
     var app = String((notification && notification.appName) || "").toLowerCase()
-    return !(app === "spotify" && !notification.isConversation)
+    // No configured list keeps the historical spotify filter for older configs.
+    if (!terms) return !(app === "spotify" && !notification.isConversation)
+    return terms.length === 0 || terms.some(function(term) { return app.indexOf(term) !== -1 })
   })
 }
 
