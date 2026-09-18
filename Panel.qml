@@ -469,6 +469,7 @@ Panel {
   
                 Text {
                   text: Math.round(mediaVolume.dragging ? mediaVolume.liveValue : media.volume) + "%"
+                  textFormat: Text.PlainText
                   color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption

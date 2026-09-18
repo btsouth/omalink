@@ -109,6 +109,10 @@ assert.equal(model.attachmentLabel("image/png"), "Photo")
 assert.equal(model.attachmentLabel("application/pdf"), "Attachment")
 assert.equal(model.thumbnailUri({ thumbnail: "iVBORw0KGgoAAAANSUhEUg" }), "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg")
 assert.equal(model.thumbnailUri({ thumbnail: "abc123" }), "")
+// A valid prefix with an oversized or malformed body, so the length and charset
+// checks are the things being tested rather than the prefix allowlist.
+assert.equal(model.thumbnailUri({ thumbnail: "iVBORw0KGgo" + "A".repeat(1048577) }), "")
+assert.equal(model.thumbnailUri({ thumbnail: "iVBORw0KGgo!!!" }), "")
 assert.equal(model.thumbnailUri({ thumbnail: "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmc" }), "")
 assert.equal(model.thumbnailUri({ thumbnail: "/9j/4AAQSkZJRgABAQ" }), "data:image/png;base64,/9j/4AAQSkZJRgABAQ")
 assert.equal(model.thumbnailUri({ thumbnail: "A".repeat(1048577) }), "")
