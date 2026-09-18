@@ -120,10 +120,10 @@ URL, or an attachment.
   desktop popups, so notification contents cannot inject markup or make the
   popup daemon fetch something remote.
 - Attachments can be opened or saved only from KDE Connect's download
-  directory. Opening one goes through OmaLink's own helper, which refuses files
+  directory. Both actions go through OmaLink's own helper, which refuses files
   the phone sent that would run (programs, scripts, and desktop entries, judged
-  by content as well as name) and hands everything else to your default
-  application.
+  by content as well as name) and files whose contents cannot be read; anything
+  else is handed to your default application or saved to Downloads.
 - The phone decides how much data there is, so the lists are bounded: each
   refresh reads at most 100 notifications and shows at most 25, and the
   conversation list and message threads carry the newest 200 entries. An app

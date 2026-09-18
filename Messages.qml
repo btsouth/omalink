@@ -419,9 +419,15 @@ Item {
 
   Process {
     id: openProcess
-    stderr: StdioCollector { waitForEnd: true }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var message = String(text || "").trim()
+        if (message !== "") root.error = message
+      }
+    }
     onExited: function(exitCode) {
-      if (exitCode !== 0) root.error = "OmaLink will not open this file"
+      if (exitCode !== 0 && root.error === "") root.error = "OmaLink will not open this file"
     }
   }
 

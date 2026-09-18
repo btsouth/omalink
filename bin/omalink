@@ -766,9 +766,16 @@ attachment() {
 }
 
 attachment_save() {
-  local source="${1:-}" downloads base name ext target n
+  local source="${1:-}" downloads base name ext target n kind
   source="$(phone_local_path "$source" "$attachment_max_bytes")"
   [[ -n $source ]] || usage
+  # Saving a file the phone made runnable only moves the problem into the
+  # Downloads folder, where a later click runs it.
+  kind="$(attachment_content_kind "$source")"
+  if [[ $kind != other ]]; then
+    echo "OmaLink will not save this attachment from the phone ($kind)" >&2
+    exit 1
+  fi
   downloads="$(xdg-user-dir DOWNLOAD 2>/dev/null || true)"
   [[ -n $downloads && $downloads != "$HOME" ]] || downloads="$HOME/Downloads"
   mkdir -p "$downloads"
@@ -803,6 +810,11 @@ attachment_content_kind() {
       ;;
   esac
   magic="$(head -c 16 -- "$path" 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+  # Nothing readable to judge by: refuse rather than hand it to the desktop.
+  [[ -n $magic ]] || {
+    printf 'unreadable file'
+    return 0
+  }
   case $magic in
     7f454c46* | 4d5a* | fecdfaed* | fecdfaef* | cefaedfe* | cafebabe*) printf 'program' ;;  # ELF, PE, Mach-O, Java
     2321*) printf 'script' ;;                                                               # #!
@@ -817,7 +829,7 @@ open_attachment() {
   [[ -n $path ]] || usage
   kind="$(attachment_content_kind "$path")"
   if [[ $kind != other ]]; then
-    echo "OmaLink will not open a $kind the phone sent" >&2
+    echo "OmaLink will not open this attachment from the phone ($kind)" >&2
     exit 1
   fi
   command -v xdg-open >/dev/null 2>&1 || {

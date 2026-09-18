@@ -257,6 +257,7 @@ jq -e '(.devices[0].notifications | length) == 4' <<<"$all_status" >/dev/null
 jq -e --arg art "file://$art_dir/art.jpg" '.devices[0].media == {player: "Apple Music", title: "Overthinking", artist: "usedcvnt", album: "Ultraviolet", volume: 40, length: 144023, position: 94844, isPlaying: true, canSeek: true, albumArt: $art, players: ["Apple Music"]}' <<<"$status" >/dev/null
 jq -e '.devices[1].media == null' <<<"$status" >/dev/null
 jq -e --arg icon "$icon_dir/abc123" '.devices[0].notifications[0].iconPath == $icon and .devices[0].notifications[1].iconPath == ""' <<<"$status" >/dev/null
+jq -e '.devices[0].notifications[0] | .title == "Phone title" and .text == "Phone text" and .isConversation == true and .dismissable == false' <<<"$status" >/dev/null
 
 # Album art and notification icons come from the phone: only local files under
 # KDE Connect's directories, verified as small raster images, are accepted.
@@ -351,18 +352,24 @@ printf '\xff\xd8\xff\xe0jpegbytes' >"$cache_root/photo.jpg"
 { printf '\x7fELF'; head -c 32 /dev/zero; } >"$cache_root/disguised.jpg"
 printf '[Desktop Entry]\nExec=/bin/sh\n' >"$cache_root/evil.desktop"
 printf '#!/bin/sh\necho hi\n' >"$cache_root/evil.sh"
+printf '#!/bin/sh\necho BOOM\n' >"$cache_root/unreadable.bin"
+chmod 000 "$cache_root/unreadable.bin"
 : >"$temp_dir/xdg-open.log"
 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment-open "$cache_root/photo.jpg"
 sleep 0.3
 grep -q "open $cache_root/photo.jpg" "$temp_dir/xdg-open.log"
-for refused in "$cache_root/disguised.jpg" "$cache_root/evil.desktop" "$cache_root/evil.sh" "$temp_dir/outside.png"; do
+for refused in "$cache_root/disguised.jpg" "$cache_root/evil.desktop" "$cache_root/evil.sh" "$cache_root/unreadable.bin" "$temp_dir/outside.png"; do
   if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment-open "$refused" >/dev/null 2>&1; then
     echo "opening $refused was accepted" >&2
     exit 1
   fi
 done
-if grep -q 'evil\.\|disguised' "$temp_dir/xdg-open.log"; then
+if grep -q 'evil\.\|disguised\|unreadable' "$temp_dir/xdg-open.log"; then
   echo "a file that would run was handed to the desktop" >&2
+  exit 1
+fi
+if HOME="$saved_home" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment-save "$cache_root/evil.sh" >/dev/null 2>&1; then
+  echo "saving a file the phone made runnable was accepted" >&2
   exit 1
 fi
 if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" dismiss '../bad' notification-1 >/dev/null 2>&1; then
