@@ -129,6 +129,12 @@ assert.equal(model.localImageSource("file:///home/bts/a b.jpg"), "file:///home/b
 assert.equal(model.localImageSource("/home/bts/a b.jpg"), "file:///home/bts/a%20b.jpg")
 assert.equal(model.localImageSource("/home/bts/a%2Fb.jpg"), "file:///home/bts/a%252Fb.jpg")
 assert.equal(model.localImageSource("/home/bts/a#b?c.jpg"), "file:///home/bts/a%23b%3Fc.jpg")
+// The URI must decode back to the path the helper validated: U+3000 has to be
+// encoded in UTF-8, and a trailing space belongs to the file name.
+assert.equal(model.localImageSource("/a\u3000b.jpg"), "file:///a%E3%80%80b.jpg")
+assert.equal(model.localImageSource("/a /b.jpg"), "file:///a%20/b.jpg")
+assert.equal(model.localImageSource("/a/b.jpg\n"), "file:///a/b.jpg")
+assert.equal(model.localImageSource("/a/b.jpg\n\n"), "file:///a/b.jpg")
 assert.equal(model.localImageSource("file:///home/bts/a%2Fb.jpg"), "file:///home/bts/a%252Fb.jpg")
 assert.equal(model.localImageSource("http://192.168.1.1/art.jpg"), "")
 assert.equal(model.localImageSource("https://example.com/art.jpg"), "")

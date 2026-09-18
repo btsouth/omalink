@@ -298,14 +298,21 @@ function mediaState(device) {
 // characters Qt would decode again. Without that, a file name containing %2F
 // would resolve to a different path than the one the helper checked.
 function localImageSource(value) {
-  var text = String(value === undefined || value === null ? "" : value).trim()
+  // Only trailing newlines come off: trimming would eat a trailing space that is
+  // part of the file name and make Qt open a different file than the one the
+  // helper validated.
+  var text = String(value === undefined || value === null ? "" : value).replace(/[\r\n]+$/, "")
   if (text === "") return ""
   if (text.indexOf("file://") === 0) text = text.slice(7)
   if (text.charAt(0) !== "/" || text.indexOf("\n") !== -1 || text.indexOf("\0") !== -1) return ""
-  var encoded = text.replace(/[%?#\s]/g, function(character) {
-    return character === " " || character === "\t" ? "%20" : "%" + character.charCodeAt(0).toString(16).toUpperCase()
-  })
-  return "file://" + encoded
+  // Percent-encode per segment, in UTF-8. A hand-rolled "%" + charCode is not
+  // UTF-8 for anything outside Latin-1, so U+3000 would encode as %3000 and Qt
+  // would decode it as a different path.
+  var segments = text.split("/")
+  for (var index = 0; index < segments.length; index++) {
+    segments[index] = encodeURIComponent(segments[index])
+  }
+  return "file://" + segments.join("/")
 }
 
 function previewText(conversation) {

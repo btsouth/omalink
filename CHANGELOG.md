@@ -2,34 +2,68 @@
 
 ## 0.2.1 - 2026-09-17
 
-- Security: treat phone-reported album art, notification icons, and attachment paths as untrusted input. They are loaded only when they resolve to a small raster image inside KDE Connect's cache or icon directory; remote URLs and other URI schemes, files outside those directories, symlinks that point elsewhere, oversized files, and SVG or other markup are dropped, and the panel decodes them at a bounded size. (Reported by HANCORE-linux in omarchy-plugin-marketplace#7127.)
-- Security: render phone text as plain text in the panel, and escape it in notification popups. The popup escaping had silently broken on bash 5.2 and newer, where `&` in a `${value//pattern/replacement}` replacement means the matched text: `<` and `>` came out as `<lt;` and `>gt;` instead of entities. `&` alone happened to still work, so the tests now pin all three.
-- Security: cap the size of phone-supplied attachment thumbnails before they are decoded.
-- Security: opening an attachment now goes through OmaLink's own helper, which refuses files the phone sent that would run (programs, scripts, desktop entries, detected by content as well as name) and detaches the viewer from the panel.
-- A device line from kdeconnect-cli that cannot be a real device id is skipped, and a D-Bus value that is not a number or a boolean falls back to a missing reading instead of breaking the whole panel status.
-- The notification watcher reaps only the dbus-monitor it orphaned, by pid and command check, instead of pattern-killing every matching process on the session bus.
-- Security: a phone that posts hundreds of notifications can no longer stall the bar. Each refresh reads at most 100 notifications and shows at most 25, since every other field needed costs a D-Bus read.
-- Security: the conversation list and each message thread are capped at the newest 200 entries, so the phone cannot decide how much data the shell has to hold and filter.
-- Security: files the phone made runnable are refused by Save to Downloads as well as Open, an attachment whose contents cannot be read is refused rather than handed to the desktop, and opening a web page or shortcut the phone sent (HTML, SVG, .url) is refused because the browser would fetch whatever it contains. Saving a page is still allowed.
-- Fix: attachment thumbnails are base64 wrapped across lines, so the new size and shape check rejected every real thumbnail. Whitespace is stripped before the checks now.
-- Fix: the panel's media section read the phone's player even when nothing was playing, which filled the journal with "Cannot read property of null" errors.
-- Security: every busctl call now passes `--` before its arguments, and attachment names, notification ids and reply ids may not start with a dash. Without that, a phone could name an attachment `--address=tcp:host=...` and make the helper open a connection to a host it chose, and with enough remaining arguments busctl runs its own ssh bridge (both proved against the real busctl).
-- Security: attachment thumbnails must start with a raster image in base64 (PNG, JPEG, GIF, WebP or BMP). That field was the one image the phone sends that skipped the raster gate, so SVG or other markup could reach the image loader through it.
-- Security: the QML layer builds the `file://` URI and percent-encodes `%`, `#`, `?` and whitespace. Album art and notification icons are handed over as plain paths now, so a name containing `%2F` can no longer decode to a path outside the one the helper checked.
-- Fix: album art is capped at 5 MiB, which is what KDE Connect itself accepts, instead of 4 MiB.
-- Fix: the compose field in the Messages window had gained `textFormat`, a property Qt Quick Controls' TextField does not have, which stopped that window from loading. `tests/qml.test.sh` now checks that property additions sit on elements that have them, and that every `Image.source` fed by phone data goes through the shared gate.
-- Security: the "Saved to" line in the Messages window printed the phone's file name with Qt's default rich text, so a phone that named a file `<img src="http://...">x.png` made the shell fetch that URL when the save finished (proved with an offscreen Qt layout and a local server). Phone text is plain text in every window now.
-- Fix: attachments are capped at 2 GB instead of 64 MB, which refused real phone video and described it as unsafe to open. Album art is capped at 8 MB instead of 5 MB, because KDE Connect decompresses what it transfers, so the file on disk can be larger than the 5 MiB it accepts on the wire.
-- Fix: an unset `HOME` no longer makes the helper fail with "unbound variable" on the status path.
-- Tests: the notification read cap and the symlink canonicalization are pinned now (raising the cap or dropping `readlink -f` fails the suite), and the symlink fixtures point at a real image outside the roots so the raster check cannot mask whether the path was canonicalized.
-- Security: opening an attachment is classified the way the desktop classifies it. The mime type decides first, and the content scan now skips a byte order mark and leading whitespace and ignores case, which closes the bypasses the review found (a lower case `<!doctype html>`, a leading newline before `<html>`, upper case `<SVG`, a BOM before `[Desktop Entry]`) that let the browser fetch URLs the phone chose.
-- Security: everything a phone can inflate is bounded now. Message and notification text is capped (8 KiB and 1 KiB), a thread carries at most ten attachments with thumbnails up to 256 KiB, the capture the watcher reads is capped at 16 MiB, and contacts are capped at 2000 with 256-character names.
-- Security: `ring` and `clipboard` validate the device id like every other subcommand, and a file with more than one hard link is refused, since the same inode could then be reached from outside the KDE Connect directories.
-- Security: the full size viewer asks for image mode, so an attachment only reaches the image loader when its contents really are a raster image rather than whatever the phone called it.
-- Fix: the notification read cap (100 per device) and the raster check on notification icons are pinned by tests, and the watcher's orphan reaping is exercised against a process that really is named dbus-monitor.
-- Tests: `tests/qml.test.sh` walks QML element blocks now, so removing a `Text.PlainText`, removing a `sourceSize` bound, feeding an Image from raw phone data, assigning `Image.source` imperatively, or adding `textFormat` to an element that does not have it all fail the suite.
-- Fix: a contact list longer than the cap no longer aborts the helper through a broken pipe; the scan stops itself once it has 2000 contacts. This surfaced only when a fixture with more contacts than the cap was added, which is also why a few caps had tests that could not fail.
-- Tests: the caps and guards that no assertion covered are pinned now, each verified by mutation: the notification title and conversation preview caps, the attachment size cap (a sparse 70 MiB fixture), the empty-file guard on both the album art and the attachment path, the contact cap and name clamp, the watcher's symlink guards (planted at an empty target, because a non-empty one is removed by the stale-reap path first), the attachment image mode, the reply-id dash guard, and every `busctl` call site keeping its `--` (the suite logs every invocation and refuses any that lacks it).
+Security, from the report in omarchy-plugin-marketplace#7127 and the review rounds
+that followed:
+
+- Album art, notification icons and attachment paths are untrusted input: a path
+  is used only when it resolves to a regular file inside KDE Connect's own cache
+  or icon directory, with a single link, under a size cap (album art 8 MiB, icons
+  1 MiB, attachments 2 GB), and only when its content is a raster image (PNG,
+  JPEG, GIF, BMP, WebP). Remote URLs, other URI schemes, symlinks and hard links
+  pointing elsewhere, directories, FIFOs, empty and oversized files, and SVG or
+  other markup are dropped, and the panel falls back to its placeholder.
+- The image URI is built in one place and percent-encoded per segment in UTF-8,
+  so a name containing `%2F`, `#`, `?`, a space or a character outside Latin-1
+  resolves to the file that was checked.
+- Attachment thumbnails must start with a raster image in base64, and the viewer
+  asks for image mode, so an attachment reaches Qt's image loader only when its
+  contents really are an image.
+- Opening an attachment is classified the way the desktop classifies it, by mime
+  type and then by a content scan that skips a byte order mark and leading
+  whitespace and ignores case. Programs, scripts, desktop entries, pages and
+  shortcuts are refused, as are files that cannot be read, and saving refuses
+  anything runnable.
+- Phone text is plain text in the panel and in both windows, and escaped in
+  notification popups. That escaping had broken on bash 5.2 and newer, where `&`
+  in a `${value//pattern/replacement}` replacement means the matched text, so `<`
+  and `>` came out as `<lt;` and `>gt;`.
+- Every busctl call passes `--` before its arguments, and attachment names,
+  notification ids and reply ids may not start with a dash. Without that, a phone
+  could name an attachment `--address=tcp:host=...` and make the helper open a
+  connection to a host it chose, and with enough arguments left busctl runs its
+  own ssh bridge.
+- Everything a phone can inflate is bounded: 100 notifications read and 25 shown
+  per refresh, the newest 200 conversations and 200 messages, titles and previews
+  at 1 KiB, text at 8 KiB, names at 256 characters, ids at 128, media metadata at
+  256, contacts at 2000, and the watcher's capture at 16 MiB.
+- `ring` and `clipboard` validate the device id like every other subcommand, and
+  a D-Bus value that is not a number or a boolean falls back to a missing reading
+  instead of emptying the panel.
+
+Fixes:
+
+- Attachment thumbnails are base64 wrapped across lines, so the first size and
+  shape check rejected every real thumbnail.
+- The panel's media section read the phone's player even when nothing was
+  playing, filling the journal with "Cannot read property of null".
+- The compose field in the Messages window had gained `textFormat`, a property
+  Qt Quick Controls' TextField does not have, which stopped that window loading.
+- The "Saved to" line rendered the phone's file name as rich text, so a name like
+  `<img src="http://...">x.png` made the shell fetch that URL.
+- A contact list longer than the cap aborted the helper through a broken pipe.
+- Oversized app names, ids or media metadata no longer make jq fail on argument
+  size and leave the panel claiming KDE Connect is not installed.
+- The messages capture is bounded by size as well as by time, and a failed parse
+  no longer leaves it behind.
+- An unset `HOME` no longer aborts the helper, `--popups` or `--notify-apps` with
+  no value is a usage error, and saving an attachment no longer writes through a
+  dangling symlink in the Downloads folder.
+
+Tests: `tests/qml.test.sh` walks QML element blocks, so a `Text` showing phone
+data without `Text.PlainText`, an `Image` without the shared gate or a
+`sourceSize` bound, an imperative `Image.source`, or `textFormat` on an element
+that does not have it all fail the suite. The CLI suite pins each cap and guard,
+after checking that the mutation it guards against fails it.
 
 ## 0.2.0 - 2026-09-15
 

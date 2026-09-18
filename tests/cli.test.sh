@@ -76,6 +76,11 @@ case "${*: -1}" in
   requestAllConversationThreads) : >"$0.requested"; exit 0 ;;
   appName)
     printf 'read\n' >>"$0.appname.log"
+    if [[ -n ${OMALINK_TEST_LONG_NAMES:-} ]]; then
+      long="$(head -c 100000 /dev/zero | tr '\0' 'A')"
+      printf '{"type":"s","data":"%s"}\n' "$long"
+      exit 0
+    fi
     if [[ " $* " == *"notif.3"* || " $* " == *"notif.10"* ]]; then
       printf '%s\n' '{"type":"s","data":"Visual Voicemail"}'
     elif [[ " $* " == *"notif.4"* || " $* " == *"notif.11"* ]]; then
@@ -106,6 +111,14 @@ case "${*: -1}" in
     else
       printf '%s\n' '{"type":"b","data":false}'
     fi
+    ;;
+  replyId)
+    if [[ -n ${OMALINK_TEST_LONG_NAMES:-} ]]; then
+      long="$(head -c 100000 /dev/zero | tr '\0' 'R')"
+      printf '{"type":"s","data":"%s"}\n' "$long"
+      exit 0
+    fi
+    printf '%s\n' '{"type":"s","data":"reply-uuid.1"}'
     ;;
   activeNotifications)
     if [[ -n ${OMALINK_TEST_MANY_NOTIFICATIONS:-} ]]; then
@@ -223,6 +236,21 @@ cat >"$temp_dir/xdg-open" <<'EOF'
 echo "open $*" >>"$0.log"
 EOF
 chmod +x "$temp_dir/xdg-open"
+
+cat >"$temp_dir/xdg-mime" <<'EOF'
+#!/usr/bin/env bash
+# The desktop's classifier is what the open gate consults, so it is stubbed the
+# way the other tools are: one name reports a parameterised mime type, and a
+# switch makes the classifier unavailable so the content scan is exercised alone.
+if [[ -n ${OMALINK_TEST_XDG_MIME_FAIL:-} ]]; then
+  exit 1
+fi
+case ${*: -1} in
+  *param.html) printf 'text/html; charset=utf-8\n'; exit 0 ;;
+esac
+exec /usr/bin/xdg-mime "$@"
+EOF
+chmod +x "$temp_dir/xdg-mime"
 
 cat >"$temp_dir/hyprctl" <<'EOF'
 #!/usr/bin/env bash
@@ -414,6 +442,9 @@ huge_body="$(OMALINK_TEST_HUGE_BODY=1 PATH="$temp_dir:/usr/bin" "$project_dir/bi
 jq -e 'length == 1 and (.[0].body | length) == 8192' <<<"$huge_body" >/dev/null
 long_preview="$(OMALINK_TEST_LONG_PREVIEW=1 XDG_DATA_HOME="$temp_dir/data" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" conversations abc123)"
 jq -e '(.[0].preview | length) == 1024' <<<"$long_preview" >/dev/null
+long_names="$(OMALINK_TEST_LONG_NAMES=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" status)"
+jq -e '(.devices[0].notifications[0].appName | length) == 256
+  and (.devices[0].notifications[0].replyId | length) == 128' <<<"$long_names" >/dev/null
 long_title="$(OMALINK_TEST_LONG_TITLE=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" status)"
 jq -e '(.devices[0].notifications[0].title | length) == 1024
   and (.devices[0].notifications[0].text | length) == 8192' <<<"$long_title" >/dev/null
@@ -445,6 +476,14 @@ if (( SECONDS - flood_start > 15 )); then
   echo "the attachment poll did not stop when the capture passed its cap" >&2
   exit 1
 fi
+# A failed jq must not skip the cleanup trap and leave the capture behind.
+leftovers_before="$(find "$temp_dir/tmp" -maxdepth 1 -name 'tmp.*' 2>/dev/null | wc -l)"
+OMALINK_TEST_FLOOD=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" messages abc123 7 >/dev/null 2>&1 || true
+leftovers_after="$(find "$temp_dir/tmp" -maxdepth 1 -name 'tmp.*' 2>/dev/null | wc -l)"
+if (( leftovers_after != leftovers_before )); then
+  echo "a failed capture left its temporary directory behind" >&2
+  exit 1
+fi
 [[ $attachment_path == "$attachment_fixture" ]]
 if OMALINK_TEST_ATTACHMENT=/etc/hostname PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment abc123 42 PART_1.jpeg >/dev/null 2>&1; then
   echo "an attachment outside the KDE Connect directories was accepted" >&2
@@ -471,19 +510,32 @@ printf '<html><body><img src="http://192.168.1.1/beacon.png"></body></html>' >"$
 printf '[InternetShortcut]\nURL=http://192.168.1.1/\n' >"$cache_root/shortcut.url"
 printf '<!doctype html><img src="http://192.168.1.1/beacon.png">' >"$cache_root/lower.bin"
 printf 'not an image at all' >"$icon_dir/notraster"
+# A page the content scan misses (it starts with an XML declaration) and one the
+# mime classifier misses (a name it cannot type, so only the scan refuses it).
+printf '<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>' >"$cache_root/xmlpage.txt"
+printf '<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>' >"$cache_root/scanpage.txt"
+printf '<html><body>x</body></html>' >"$cache_root/param.html"
 printf '#!/bin/sh\necho BOOM\n' >"$cache_root/unreadable.bin"
 chmod 000 "$cache_root/unreadable.bin"
 : >"$temp_dir/xdg-open.log"
 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment-open "$cache_root/photo.jpg"
 sleep 0.3
 grep -q "open $cache_root/photo.jpg" "$temp_dir/xdg-open.log"
-for refused in "$cache_root/disguised.jpg" "$cache_root/evil.desktop" "$cache_root/evil.sh" "$cache_root/unreadable.bin" "$cache_root/page.html" "$cache_root/lower.bin" "$cache_root/shortcut.url" "$art_dir/evil.svg" "$temp_dir/outside.png"; do
+for refused in "$cache_root/disguised.jpg" "$cache_root/evil.desktop" "$cache_root/evil.sh" "$cache_root/unreadable.bin" "$cache_root/page.html" "$cache_root/lower.bin" "$cache_root/xmlpage.txt" "$cache_root/scanpage.txt" "$cache_root/param.html" "$cache_root/shortcut.url" "$art_dir/evil.svg" "$temp_dir/outside.png"; do
   if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment-open "$refused" >/dev/null 2>&1; then
     echo "opening $refused was accepted" >&2
     exit 1
   fi
 done
-if grep -q 'evil\.\|disguised\|unreadable\|page\.html\|shortcut' "$temp_dir/xdg-open.log"; then
+# With the classifier unavailable, the content scan alone still has to refuse the
+# page, and the magic check alone still has to refuse a program.
+for refused_without_mime in "$cache_root/scanpage.txt" "$cache_root/disguised.jpg"; do
+  if OMALINK_TEST_XDG_MIME_FAIL=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment-open "$refused_without_mime" >/dev/null 2>&1; then
+    echo "opening $refused_without_mime was accepted without the mime classifier" >&2
+    exit 1
+  fi
+done
+if grep -q 'evil\.\|disguised\|unreadable\|page\.html\|shortcut\|xmlpage\|scanpage\|param' "$temp_dir/xdg-open.log"; then
   echo "a refused file was handed to the desktop" >&2
   exit 1
 fi

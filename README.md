@@ -109,6 +109,9 @@ Everything OmaLink reads comes from the paired phone and is treated as
 untrusted: any app on the phone can choose a notification title, an album art
 URL, or an attachment.
 
+- A file with more than one hard link is refused, so the same inode cannot be
+  reached from outside KDE Connect's directories even though its path resolves
+  inside them.
 - Images from the phone (album art, notification icons, attachment previews)
   are loaded only when they are local files under KDE Connect's own cache and
   icon directories, stay under a size limit (album art 8 MiB, notification
@@ -135,10 +138,11 @@ URL, or an attachment.
   application or saved to Downloads.
 - The phone decides how much data there is, so everything is bounded: each
   refresh reads at most 100 notifications and shows at most 25, the conversation
-  list and message threads carry the newest 200 entries, message and notification
-  text is capped (8 KiB and 1 KiB), contacts are capped at 2000, and the capture
-  the watcher reads is capped at 16 MiB. An app that posts or sends thousands
-  cannot stall the bar or fill memory.
+  list and message threads carry the newest 200 entries, notification titles and
+  conversation previews are capped at 1 KiB, notification and message text at
+  8 KiB, app names at 256 characters, ids at 128, media metadata at 256, contacts
+  at 2000 with 256-character names, and the capture the watcher reads at 16 MiB.
+  An app that posts or sends thousands cannot stall the bar or fill memory.
 - OmaLink never builds a shell command out of phone data. Values passed to
   `kdeconnect-cli`, `busctl`, and the plugin's own helper are passed as single
   arguments and validated first, every `busctl` call separates its options with

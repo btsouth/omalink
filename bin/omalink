@@ -31,6 +31,10 @@ attachment_max_bytes=$((2 * 1024 * 1024 * 1024))
 title_max_chars=1024
 body_max_chars=8192
 preview_max_chars=1024
+name_max_chars=256
+id_max_chars=128
+media_max_chars=256
+players_max=20
 thumbnail_max_chars=262144
 attachments_per_message=10
 contacts_max=2000
@@ -232,15 +236,15 @@ notification_json() {
     read_count=$((read_count + 1))
     [[ $notification_id =~ ^[A-Za-z0-9._:-]+$ ]] || continue
     notification_path="$notification_root/$notification_id"
-    app_name="$(dbus_json_property "$notification_path" appName)"
-    internal_id="$(dbus_json_property "$notification_path" internalId)"
+    app_name="$(truncate_text "$(dbus_json_property "$notification_path" appName)" "$name_max_chars")"
+    internal_id="$(truncate_text "$(dbus_json_property "$notification_path" internalId)" "$name_max_chars")"
     notification_allowed "$app_name" "$internal_id" || continue
     kept_count=$((kept_count + 1))
     title="$(truncate_text "$(dbus_json_property "$notification_path" title)" "$title_max_chars")"
     text="$(truncate_text "$(dbus_json_property "$notification_path" text)" "$body_max_chars")"
     icon_path="$(phone_image_path "$(dbus_json_property "$notification_path" iconPath)" "$icon_max_bytes")"
     dismissable="$(boolean_or "$(dbus_json_property "$notification_path" dismissable)" false)"
-    reply_id="$(dbus_json_property "$notification_path" replyId)"
+    reply_id="$(truncate_text "$(dbus_json_property "$notification_path" replyId)" "$id_max_chars")"
     is_conversation="$(boolean_or "$(dbus_json_property "$notification_path" isConversation)" false)"
     notifications+=("$(jq -cn \
       --arg id "$notification_id" \
@@ -323,15 +327,16 @@ media_json() {
   local player title artist album volume length position is_playing can_seek album_art
   raw="$(busctl --user --json=short get-property -- org.kde.kdeconnect "$mpris_path" \
     org.kde.kdeconnect.device.mprisremote playerList 2>/dev/null || true)"
-  player_list="$(jq -c '.data // []' <<<"$raw" 2>/dev/null || true)"
+  player_list="$(jq -c --argjson max "$players_max" --argjson chars "$media_max_chars" \
+    '[(.data // [])[] | (tostring | .[0:$chars])][0:$max]' <<<"$raw" 2>/dev/null || true)"
   if [[ -z $player_list || $player_list == "[]" ]]; then
     printf 'null\n'
     return
   fi
-  player="$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote player s)"
-  title="$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote title s)"
-  artist="$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote artist s)"
-  album="$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote album s)"
+  player="$(truncate_text "$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote player s)" "$media_max_chars")"
+  title="$(truncate_text "$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote title s)" "$media_max_chars")"
+  artist="$(truncate_text "$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote artist s)" "$media_max_chars")"
+  album="$(truncate_text "$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote album s)" "$media_max_chars")"
   volume="$(numeric_or "$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote volume i)" 0)"
   length="$(numeric_or "$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote length i)" 0)"
   position="$(numeric_or "$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote position i)" 0)"
@@ -448,7 +453,7 @@ dismiss_notification() {
 # click action that opens the OmaLink panel. Message contents are never shown
 # in popups; they are readable in the panel and Messages window.
 ensure_quiet_daemon_popups() {
-  local config="${XDG_CONFIG_HOME:-$HOME/.config}/kdeconnect.notifyrc"
+  local config="${XDG_CONFIG_HOME:-${HOME:-}/.config}/kdeconnect.notifyrc"
   mkdir -p "$(dirname "$config")"
   if [[ -e $config ]]; then
     grep -q '^\[Event/notification\]' "$config" \
@@ -477,8 +482,8 @@ handle_posted() {
   silent="$(dbus_json_property "$notification_path" silent)"
   [[ $silent == true ]] && return 0
   [[ $NOTIFY_POPUPS == off ]] && return 0
-  app_name="$(dbus_json_property "$notification_path" appName)"
-  internal_id="$(dbus_json_property "$notification_path" internalId)"
+  app_name="$(truncate_text "$(dbus_json_property "$notification_path" appName)" "$name_max_chars")"
+  internal_id="$(truncate_text "$(dbus_json_property "$notification_path" internalId)" "$name_max_chars")"
   notification_allowed "$app_name" "$internal_id" || return 0
   title="$(truncate_text "$(dbus_json_property "$notification_path" title)" "$title_max_chars")"
   text="$(truncate_text "$(dbus_json_property "$notification_path" text)" "$body_max_chars")"
@@ -615,7 +620,7 @@ dismiss_all_notifications() {
 contact_records_json() {
   local device_id="$1" device_path contact_dir
   device_path="/modules/kdeconnect/devices/$device_id"
-  contact_dir="${XDG_DATA_HOME:-$HOME/.local/share}/kpeoplevcard/kdeconnect-$device_id"
+  contact_dir="${XDG_DATA_HOME:-${HOME:-}/.local/share}/kpeoplevcard/kdeconnect-$device_id"
 
   busctl --user call -- org.kde.kdeconnect "$device_path/contacts" \
     org.kde.kdeconnect.device.contacts synchronizeRemoteWithLocal >/dev/null 2>&1 || true
@@ -751,7 +756,15 @@ messages() {
     org.kde.kdeconnect.device.conversations requestConversation xii "$thread_id" 0 30 >/dev/null \
     || true
 
-  sleep 0.5
+  # The usual half second, but stop waiting early if the phone flooded the bus:
+  # this capture is slurped whole by jq below, so its size is bounded here as
+  # well as its duration.
+  for attempt in $(seq 1 5); do
+    if (( $(stat -c %s -- "$capture_file" 2>/dev/null || printf '0') > capture_max_bytes )); then
+      break
+    fi
+    sleep 0.1
+  done
   kill "$monitor_pid" 2>/dev/null || true
   wait "$monitor_pid" 2>/dev/null || true
   monitor_pid=""
@@ -779,7 +792,7 @@ messages() {
     | .[-$messagesMax:]
   ' --argjson messagesMax "$messages_max" --argjson bodyMax "$body_max_chars" \
     --argjson thumbMax "$thumbnail_max_chars" --argjson attachmentsMax "$attachments_per_message" \
-    "$capture_file"
+    "$capture_file" || printf '[]\n'
 }
 
 attachment() {
@@ -862,12 +875,14 @@ attachment_save() {
       ;;
   esac
   downloads="$(xdg-user-dir DOWNLOAD 2>/dev/null || true)"
-  [[ -n $downloads && $downloads != "$HOME" ]] || downloads="$HOME/Downloads"
+  [[ -n $downloads && $downloads != "${HOME:-}" ]] || downloads="${HOME:-}/Downloads"
   mkdir -p "$downloads"
   base="$(basename "$source")"
   target="$downloads/$base"
   n=1
-  while [[ -e $target ]]; do
+  # -L as well as -e: a dangling symlink is a name that already exists, and cp
+  # would otherwise write through it.
+  while [[ -e $target || -L $target ]]; do
     name="${base%.*}"
     ext="${base##*.}"
     if [[ -z $name || $name == "$base" ]]; then
@@ -894,6 +909,9 @@ attachment_mime_kind() {
   command -v xdg-mime >/dev/null 2>&1 || return 1
   mime="$(xdg-mime query filetype "$path" 2>/dev/null)" || return 1
   [[ -n $mime ]] || return 1
+  # xdg-open strips the parameters before choosing a handler, so a value like
+  # "text/html; charset=utf-8" must not slip past the exact match below.
+  mime="${mime%%;*}"
   case ${mime,,} in
     text/html | application/xhtml+xml | image/svg+xml)
       printf 'web page'
@@ -909,13 +927,13 @@ attachment_content_kind() {
   local path="$1" magic name text kind
   name="${path##*/}"
   case ${name,,} in
-    *.desktop | *.lnk | *.scr | *.appimage | *.exe | *.msi | *.bat | *.cmd | *.ps1 | *.sh | *.bash | *.zsh | *.py | *.pl | *.rb | *.jar | *.deb | *.rpm)
+    *.desktop | *.lnk | *.scr | *.appimage | *.exe | *.msi | *.bat | *.cmd | *.ps1 | *.sh | *.bash | *.zsh | *.py | *.pl | *.rb | *.cgi | *.php | *.asp | *.aspx | *.jsp | *.jar | *.deb | *.rpm)
       printf 'program'
       return 0
       ;;
     # A page or a shortcut opens in the browser and fetches whatever the phone
     # put in it, which is a request the user did not ask for.
-    *.html | *.htm | *.xhtml | *.svg | *.mhtml | *.url | *.webloc)
+    *.html | *.htm | *.xhtml | *.shtml | *.xht | *.svg | *.svgz | *.mhtml | *.mht | *.url | *.webloc)
       printf 'web page'
       return 0
       ;;
@@ -984,7 +1002,7 @@ reply() {
 # latest message is newer than the seen timestamp. Only ids and timestamps are
 # stored, never message content.
 seen_file() {
-  printf '%s/omalink/seen.json' "${XDG_STATE_HOME:-$HOME/.local/state}"
+  printf '%s/omalink/seen.json' "${XDG_STATE_HOME:-${HOME:-}/.local/state}"
 }
 
 seen() {
@@ -1029,8 +1047,10 @@ NOTIFY_POPUPS="on"
 omalink_args=()
 while (( $# > 0 )); do
   case $1 in
-    --notify-apps) NOTIFY_APPS_SET=1; NOTIFY_APPS="${2:-}"; shift 2 ;;
-    --popups) NOTIFY_POPUPS="${2:-on}"; shift 2 ;;
+    # An empty value is meaningful for --notify-apps (allow everything), so the
+    # check is for a missing argument, not an empty one.
+    --notify-apps) (( $# >= 2 )) || usage; NOTIFY_APPS_SET=1; NOTIFY_APPS="$2"; shift 2 ;;
+    --popups) (( $# >= 2 )) || usage; NOTIFY_POPUPS="$2"; shift 2 ;;
     *) omalink_args+=("$1"); shift ;;
   esac
 done

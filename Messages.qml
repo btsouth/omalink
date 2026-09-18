@@ -395,7 +395,9 @@ Item {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        var path = String(text || "").trim()
+        // Only the trailing newline comes off: a trailing space is part of the
+        // phone's file name.
+        var path = String(text || "").replace(/[\r\n]+$/, "")
         if (path === "") return
         var unique = root.attachmentFetchUnique
         var updated = {}
