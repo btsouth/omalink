@@ -244,6 +244,8 @@ printf '<svg xmlns="http://www.w3.org/2000/svg"><image href="http://192.168.1.1/
 { printf '\x89PNG\r\n\x1a\n'; head -c 8388601 /dev/zero; } >"$art_dir/big.png"
 { printf '\x89PNG\r\n\x1a\n'; head -c 8388600 /dev/zero; } >"$art_dir/at-limit.png"
 ln -s "$temp_dir/outside.png" "$art_dir/link.jpg"
+printf '\x89PNG\r\n\x1a\npngbytes' >"$temp_dir/hardlink-source.png"
+ln -f "$temp_dir/hardlink-source.png" "$art_dir/hardlinked.png"
 ln -s "$temp_dir" "$art_dir/escape"
 printf '\x89PNG\r\n\x1a\npngbytes' >"$temp_dir/outside.png"
 
@@ -300,6 +302,7 @@ for rejected in \
   "file://$temp_dir/outside.png" \
   "file://$art_dir" \
   "file://$art_dir/link.jpg" \
+  "file://$art_dir/hardlinked.png" \
   "file://$art_dir/escape/outside.png" \
   "file://$art_dir/pipe" \
   "file://$art_dir/evil.svg" \
