@@ -28,6 +28,8 @@
 - Security: the full size viewer asks for image mode, so an attachment only reaches the image loader when its contents really are a raster image rather than whatever the phone called it.
 - Fix: the notification read cap (100 per device) and the raster check on notification icons are pinned by tests, and the watcher's orphan reaping is exercised against a process that really is named dbus-monitor.
 - Tests: `tests/qml.test.sh` walks QML element blocks now, so removing a `Text.PlainText`, removing a `sourceSize` bound, feeding an Image from raw phone data, assigning `Image.source` imperatively, or adding `textFormat` to an element that does not have it all fail the suite.
+- Fix: a contact list longer than the cap no longer aborts the helper through a broken pipe; the scan stops itself once it has 2000 contacts. This surfaced only when a fixture with more contacts than the cap was added, which is also why a few caps had tests that could not fail.
+- Tests: the caps and guards that no assertion covered are pinned now, each verified by mutation: the notification title and conversation preview caps, the attachment size cap (a sparse 70 MiB fixture), the empty-file guard on both the album art and the attachment path, the contact cap and name clamp, the watcher's symlink guards (planted at an empty target, because a non-empty one is removed by the stale-reap path first), the attachment image mode, the reply-id dash guard, and every `busctl` call site keeping its `--` (the suite logs every invocation and refuses any that lacks it).
 
 ## 0.2.0 - 2026-09-15
 

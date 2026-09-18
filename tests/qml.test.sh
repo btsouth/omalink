@@ -78,7 +78,7 @@ for file in "$project_dir"/*.qml; do
     owner="$(printf '%s' "${text%%|*}" | tr -d '[:space:]')"
 
     # A Text showing phone data has to say so.
-    if [[ $owner == Text{ ]] && printf '%s' "$text" | grep -qE 'text[[:space:]]*:[^"]*(Model\.|modelData\.|root\.viewerStatus|root\.notifReplyTitle|root\.shareDeviceName|phone\.statusText)'; then
+    if [[ $owner == Text{ ]] && printf '%s' "$text" | grep -qE 'text[[:space:]]*:.*(Model\.|modelData\.|root\.viewerStatus|root\.notifReplyTitle|root\.shareDeviceName|phone\.statusText)'; then
       printf '%s' "$text" | grep -q 'textFormat: Text.PlainText' ||
         fail "Text showing phone data without textFormat: $name:$line"
     fi

@@ -625,7 +625,8 @@ contact_records_json() {
     return
   fi
 
-  awk '
+  awk -v max="$contacts_max" '
+    BEGIN { emitted = 0 }
     function value() { return substr($0, index($0, ":") + 1) }
     /^BEGIN:VCARD/ { name = ""; phone_count = 0 }
     /^FN[;:]/ { name = value(); gsub(/\\,/, ",", name); gsub(/\\;/, ";", name) }
@@ -633,10 +634,15 @@ contact_records_json() {
     /^END:VCARD/ {
       gsub(/[\t\r\n]/, " ", name)
       if (length(name) > 256) name = substr(name, 1, 256)
-      for (i = 1; i <= phone_count; i++) if (name != "") print phones[i] "\t" name
+      for (i = 1; i <= phone_count; i++) {
+        if (name == "") continue
+        if (emitted >= max) exit
+        print phones[i] "\t" name
+        emitted++
+      }
       delete phones
     }
-  ' "$contact_dir"/*.vcf | head -n "$contacts_max" | jq -Rsc '
+  ' "$contact_dir"/*.vcf | jq -Rsc '
     split("\n")
     | map(select(length > 0) | split("\t") | {number: .[0], name: .[1]})
     | unique_by(.number)
@@ -800,13 +806,13 @@ attachment() {
 
   path=""
   for attempt in $(seq 1 60); do
-    path="$(jq -r --arg unique "$unique" '
+    path="$( { jq -r --arg unique "$unique" '
       select(.type == "signal"
           and .interface == "org.kde.kdeconnect.device.conversations"
           and .member == "attachmentReceived")
       | select(.payload.data[1] == $unique)
       | .payload.data[0]
-    ' "$capture_file" 2>/dev/null | head -n 1)"
+    ' "$capture_file" 2>/dev/null || true; } | head -n 1 )"
     [[ -z $path ]] || break
     # A phone that floods the bus with signals could otherwise fill the capture
     # directory (tmpfs) for as long as this loop waits.

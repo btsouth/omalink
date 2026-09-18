@@ -42,10 +42,14 @@ chmod +x "$temp_dir/kdeconnect-cli"
 
 cat >"$temp_dir/busctl" <<'EOF'
 #!/usr/bin/env bash
+printf '%s\n' "$*" >>"$0.all.log"
 if [[ " $* " == *" replyToConversation "* || " $* " == *" sendReply "* || " $* " == *" requestAttachmentFile "* ]]; then
   exit 0
 fi
 if [[ " $* " == *" monitor "* ]]; then
+  if [[ -n ${OMALINK_TEST_FLOOD:-} ]]; then
+    head -c 20000000 /dev/zero | tr '\0' 'F'
+  fi
   if [[ -n ${OMALINK_TEST_HUGE_BODY:-} ]]; then
     bigbody="$(head -c 20000 /dev/zero | tr '\0' 'B')"
     printf '{"type":"signal","interface":"org.kde.kdeconnect.device.conversations","member":"conversationUpdated","payload":{"data":[{"data":[1,"%s",[["+155****0001"]],1,1,0,7,10,-1,[]]}]}}\n' "$bigbody"
@@ -158,7 +162,10 @@ case "${*: -1}" in
     fi
     ;;
   text)
-    if [[ " $* " == *"/notif.9 "* ]]; then
+    if [[ -n ${OMALINK_TEST_LONG_TITLE:-} ]]; then
+      long="$(head -c 20000 /dev/zero | tr '\0' 'X')"
+      printf '{"type":"s","data":"%s"}\n' "$long"
+    elif [[ " $* " == *"/notif.9 "* ]]; then
       printf '%s\n' '{"type":"s","data":"<b>Bold</b> & Co"}'
     else
       printf '%s\n' '{"type":"s","data":"Phone text"}'
@@ -249,6 +256,7 @@ printf '\x89PNG\r\n\x1a\npngbytes' >"$icon_dir/abc123"
 printf '<svg xmlns="http://www.w3.org/2000/svg"><image href="http://192.168.1.1/x.png"/></svg>' >"$art_dir/evil.svg"
 { printf '\x89PNG\r\n\x1a\n'; head -c 8388601 /dev/zero; } >"$art_dir/big.png"
 { printf '\x89PNG\r\n\x1a\n'; head -c 8388600 /dev/zero; } >"$art_dir/at-limit.png"
+: >"$art_dir/empty.png"
 ln -s "$temp_dir/outside.png" "$art_dir/link.jpg"
 printf '\x89PNG\r\n\x1a\npngbytes' >"$temp_dir/hardlink-source.png"
 ln -f "$temp_dir/hardlink-source.png" "$art_dir/hardlinked.png"
@@ -258,9 +266,29 @@ printf '\x89PNG\r\n\x1a\npngbytes' >"$temp_dir/outside.png"
 mkfifo "$art_dir/pipe"
 attachment_fixture="$attachment_dir/PART_1.jpeg"
 printf 'jpegbytes' >"$attachment_fixture"
+# Attachments the phone named: text that claims to be a photo, and one far over
+# any sane size cap (sparse, so creating it costs nothing).
+printf 'this is text the phone called a photo' >"$cache_root/notreally.png"
+truncate -s 73400320 "$cache_root/large-attachment.bin"
+: >"$cache_root/empty-attachment.bin"
 export OMALINK_TEST_ALBUM_ART="file://$art_dir/art.jpg"
 export OMALINK_TEST_ICON_PATH="$icon_dir/abc123"
 export OMALINK_TEST_ATTACHMENT="$attachment_fixture"
+
+long_name_dir="$temp_dir/data-longname/kpeoplevcard/kdeconnect-abc123"
+mkdir -p "$long_name_dir"
+{
+  printf 'BEGIN:VCARD\nVERSION:2.1\nFN:'
+  head -c 300 /dev/zero | tr '\0' 'N'
+  printf '\nTEL;CELL:+155****4321\nEND:VCARD\n'
+} >"$long_name_dir/contact.vcf"
+many_contacts_dir="$temp_dir/data-many/kpeoplevcard/kdeconnect-abc123"
+mkdir -p "$many_contacts_dir"
+{
+  for index in $(seq 1 2100); do
+    printf 'BEGIN:VCARD\nVERSION:2.1\nFN:Person %s\nTEL;CELL:+1555%06d\nEND:VCARD\n' "$index" "$index"
+  done
+} >"$many_contacts_dir/many.vcf"
 
 status="$(PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" status)"
 junk_status="$(OMALINK_TEST_JUNK=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" status)"
@@ -309,6 +337,7 @@ for rejected in \
   "file://$art_dir" \
   "file://$art_dir/link.jpg" \
   "file://$art_dir/hardlinked.png" \
+  "file://$art_dir/empty.png" \
   "file://$art_dir/escape/outside.png" \
   "file://$art_dir/pipe" \
   "file://$art_dir/evil.svg" \
@@ -337,8 +366,14 @@ jq -e '.title == "Overthinking" and .artist == "usedcvnt" and .players == ["Appl
 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" media-action abc123 PlayPause >/dev/null
 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" media-volume abc123 65 >/dev/null
 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" media-seek abc123 100000 >/dev/null
-grep -q 'call -- org.kde.kdeconnect' "$temp_dir/busctl.log"
-if grep -q -- '--address' "$temp_dir/busctl.log"; then
+# Every invocation the suite made must separate its options from its arguments:
+# one call site losing its -- is enough for a phone value to be read as an option.
+if grep -qE '(call|get-property|monitor) org\.kde\.kdeconnect' "$temp_dir/busctl.all.log"; then
+  echo "a busctl call does not separate its options from its arguments:" >&2
+  grep -E '(call|get-property|monitor) org\.kde\.kdeconnect' "$temp_dir/busctl.all.log" | head -3 >&2
+  exit 1
+fi
+if grep -q -- '--address' "$temp_dir/busctl.all.log"; then
   echo "a phone-supplied value reached busctl as an option" >&2
   exit 1
 fi
@@ -358,6 +393,10 @@ PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" notify-reply abc123 reply-u
 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" sms abc123 +15550000001 "New message" >/dev/null
 contacts="$(XDG_DATA_HOME="$temp_dir/data" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" contacts abc123)"
 jq -e 'length == 1 and .[0].name == "Alex Rivera" and .[0].number == "+15550000001"' <<<"$contacts" >/dev/null
+long_name_contacts="$(XDG_DATA_HOME="$temp_dir/data-longname" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" contacts abc123)"
+jq -e 'length == 1 and (.[0].name | length) == 256' <<<"$long_name_contacts" >/dev/null
+many_contacts="$(XDG_DATA_HOME="$temp_dir/data-many" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" contacts abc123)"
+jq -e 'length == 2000' <<<"$many_contacts" >/dev/null
 conversations="$(XDG_DATA_HOME="$temp_dir/data" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" conversations abc123)"
 jq -e 'length == 2 and .[0].threadId == 7 and .[0].unread == true and .[0].names[0] == "Alex Rivera" and .[1].incoming == false' <<<"$conversations" >/dev/null
 jq -e '.[0].attachments[0] == {partId: 42, mimeType: "image/jpeg", thumbnail: "VGh1bWI=", unique: "PART_1.jpeg"} and .[1].attachments == []' <<<"$conversations" >/dev/null
@@ -376,7 +415,8 @@ jq -e 'length == 1 and (.[0].body | length) == 8192' <<<"$huge_body" >/dev/null
 long_preview="$(OMALINK_TEST_LONG_PREVIEW=1 XDG_DATA_HOME="$temp_dir/data" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" conversations abc123)"
 jq -e '(.[0].preview | length) == 1024' <<<"$long_preview" >/dev/null
 long_title="$(OMALINK_TEST_LONG_TITLE=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" status)"
-jq -e '(.devices[0].notifications[0].title | length) == 1024' <<<"$long_title" >/dev/null
+jq -e '(.devices[0].notifications[0].title | length) == 1024
+  and (.devices[0].notifications[0].text | length) == 8192' <<<"$long_title" >/dev/null
 rm -f "$temp_dir/busctl.requested"
 cold_conversations="$(COLD_CONVERSATION_CACHE=1 XDG_DATA_HOME="$temp_dir/data" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" conversations abc123)"
 jq -e 'length == 2 and .[0].threadId == 7' <<<"$cold_conversations" >/dev/null
@@ -386,6 +426,23 @@ image_path="$(OMALINK_TEST_ATTACHMENT="$art_dir/art.jpg" PATH="$temp_dir:/usr/bi
 [[ $image_path == "$art_dir/art.jpg" ]]
 if OMALINK_TEST_ATTACHMENT="$cache_root/notreally.png" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment abc123 42 PART_1.jpeg image >/dev/null 2>&1; then
   echo "an attachment the phone called an image was loaded as one" >&2
+  exit 1
+fi
+large_path="$(OMALINK_TEST_ATTACHMENT="$cache_root/large-attachment.bin" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment abc123 42 PART_1.jpeg file)"
+[[ $large_path == "$cache_root/large-attachment.bin" ]]
+if OMALINK_TEST_ATTACHMENT="$cache_root/empty-attachment.bin" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment abc123 42 PART_1.jpeg file >/dev/null 2>&1; then
+  echo "an empty attachment was accepted" >&2
+  exit 1
+fi
+# A phone flooding the bus must not keep the poll filling the capture for its
+# whole 30 second window.
+flood_start=$SECONDS
+if OMALINK_TEST_FLOOD=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment abc123 42 PART_1.jpeg file >/dev/null 2>&1; then
+  echo "a flooded capture was accepted" >&2
+  exit 1
+fi
+if (( SECONDS - flood_start > 15 )); then
+  echo "the attachment poll did not stop when the capture passed its cap" >&2
   exit 1
 fi
 [[ $attachment_path == "$attachment_fixture" ]]
@@ -414,7 +471,6 @@ printf '<html><body><img src="http://192.168.1.1/beacon.png"></body></html>' >"$
 printf '[InternetShortcut]\nURL=http://192.168.1.1/\n' >"$cache_root/shortcut.url"
 printf '<!doctype html><img src="http://192.168.1.1/beacon.png">' >"$cache_root/lower.bin"
 printf 'not an image at all' >"$icon_dir/notraster"
-printf 'this is text the phone called a photo' >"$cache_root/notreally.png"
 printf '#!/bin/sh\necho BOOM\n' >"$cache_root/unreadable.bin"
 chmod 000 "$cache_root/unreadable.bin"
 : >"$temp_dir/xdg-open.log"
@@ -467,6 +523,7 @@ expect_usage attachment abc123 42 '--address=tcp:host=127.0.0.1,port=1'
 expect_usage attachment abc123 42 '--host=attacker@evil.example'
 expect_usage attachment abc123 42 '-1'
 expect_usage dismiss abc123 '--user'
+expect_usage notify-reply abc123 '--user' 'hi'
 expect_usage ring '--user'
 expect_usage clipboard '--user'
 if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" media '../bad' >/dev/null 2>&1; then
@@ -550,6 +607,26 @@ XDG_RUNTIME_DIR="$temp_dir" XDG_CONFIG_HOME="$temp_dir/xdg" PATH="$temp_dir:/usr
 if kill -0 "$orphan" 2>/dev/null; then
   echo "the watcher left its orphaned monitor running" >&2
   kill "$orphan" 2>/dev/null || true
+  exit 1
+fi
+
+# A symlink planted under the watcher's names must not become a file it writes
+# through, which is what a world-writable runtime directory allows.
+# Two victims, because the two writes differ: the pid is written (so an empty
+# target shows it) and the lock is only opened for writing (so a non-empty target
+# shows the truncation). A non-empty pid target would be removed by the
+# stale-reap path first and hide the guard.
+: >"$temp_dir/victim-empty.txt"
+printf 'keep me\n' >"$temp_dir/victim-full.txt"
+ln -sf "$temp_dir/victim-empty.txt" "$temp_dir/omalink-watch.pid"
+ln -sf "$temp_dir/victim-full.txt" "$temp_dir/omalink-watch.lock"
+XDG_RUNTIME_DIR="$temp_dir" XDG_CONFIG_HOME="$temp_dir/xdg" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" watch >/dev/null
+if [[ -s "$temp_dir/victim-empty.txt" ]]; then
+  echo "the watcher wrote through a planted pid symlink" >&2
+  exit 1
+fi
+if [[ "$(cat "$temp_dir/victim-full.txt")" != "keep me" ]]; then
+  echo "the watcher truncated a file through a planted lock symlink" >&2
   exit 1
 fi
 if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" sms abc123 'bad;number' "Test" >/dev/null 2>&1; then

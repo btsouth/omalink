@@ -862,6 +862,7 @@ Item {
                           text: attachmentItem.fetching
                             ? "Fetching…"
                             : Model.attachmentLabel(attachmentItem.modelData.mimeType)
+                          textFormat: Text.PlainText
                           color: bubble.contentColor
                           font.family: root.fontFamily
                           font.pixelSize: Style.font.caption
