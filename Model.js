@@ -260,11 +260,25 @@ function attachmentLabel(mimeType) {
 }
 
 function thumbnailUri(attachment) {
-  var thumbnail = String((attachment && attachment.thumbnail) || "")
-  // The phone sends this thumbnail; keep the data URI small and well formed.
+  // The phone sends this thumbnail; KDE Connect hands it over as base64 wrapped
+  // across lines, so whitespace comes out before the size and shape checks.
+  var thumbnail = String((attachment && attachment.thumbnail) || "").replace(/\s+/g, "")
   if (thumbnail === "" || thumbnail.length > 1048576) return ""
   if (!/^[A-Za-z0-9+/=]+$/.test(thumbnail)) return ""
   return "data:image/png;base64," + thumbnail
+}
+
+// The media block of the panel reads the phone's player even when there is
+// none, which is what produced "Cannot read property of null" in the journal.
+function mediaState(device) {
+  var media = device && device.media && typeof device.media === "object" ? device.media : null
+  if (!media) {
+    return {
+      player: "", title: "", artist: "", album: "", volume: 0, length: 0,
+      position: 0, isPlaying: false, canSeek: false, albumArt: ""
+    }
+  }
+  return media
 }
 
 // Every Image.source that comes from the phone goes through here. The helper
@@ -418,6 +432,7 @@ if (typeof module !== "undefined") {
     attachmentKind: attachmentKind,
     attachmentLabel: attachmentLabel,
     thumbnailUri: thumbnailUri,
+    mediaState: mediaState,
     localImageSource: localImageSource,
     previewText: previewText,
     redactedNotification: redactedNotification,

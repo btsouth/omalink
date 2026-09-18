@@ -303,9 +303,15 @@ Panel {
             // Compact by design: the header lives in the track-info column, and
             // the thin MediaBar sliders keep seek and volume to one line each.
             ColumnLayout {
+              id: mediaSection
               visible: phone.mediaControls && Model.hasMedia(modelData)
               Layout.fillWidth: true
               spacing: Style.space(4)
+
+              // Never null: the bindings below evaluate even while this section
+              // is hidden, which is what filled the journal with
+              // "Cannot read property 'volume' of null".
+              readonly property var media: Model.mediaState(modelData)
   
               RowLayout {
                 Layout.fillWidth: true
@@ -317,7 +323,7 @@ Panel {
 
                   // Album art comes from the phone, so it is only loaded as a
                   // verified local file and only decoded at thumbnail size.
-                  readonly property string artSource: Model.localImageSource(modelData.media.albumArt)
+                  readonly property string artSource: Model.localImageSource(mediaSection.media.albumArt)
 
                   Image {
                     anchors.fill: parent
@@ -345,7 +351,7 @@ Panel {
   
                   Text {
                     Layout.fillWidth: true
-                    text: "NOW PLAYING · " + modelData.media.player
+                    text: "NOW PLAYING · " + media.player
                     textFormat: Text.PlainText
                     color: root.dim
                     font.family: root.fontFamily
@@ -357,7 +363,7 @@ Panel {
   
                   Text {
                     Layout.fillWidth: true
-                    text: Model.mediaTitle(modelData.media)
+                    text: Model.mediaTitle(media)
                     textFormat: Text.PlainText
                     color: root.foreground
                     font.family: root.fontFamily
@@ -369,7 +375,7 @@ Panel {
                   Text {
                     visible: text !== ""
                     Layout.fillWidth: true
-                    text: Model.mediaSubtitle(modelData.media)
+                    text: Model.mediaSubtitle(media)
                     textFormat: Text.PlainText
                     color: root.dim
                     font.family: root.fontFamily
@@ -387,8 +393,8 @@ Panel {
                 }
   
                 PanelActionButton {
-                  iconText: modelData.media.isPlaying ? "󰏤" : "󰐊"
-                  tooltipText: modelData.media.isPlaying ? "Pause" : "Play"
+                  iconText: media.isPlaying ? "󰏤" : "󰐊"
+                  tooltipText: media.isPlaying ? "Pause" : "Play"
                   foreground: root.foreground
                   fontFamily: root.fontFamily
                   onClicked: phone.mediaAction(modelData.id, "PlayPause")
@@ -404,12 +410,12 @@ Panel {
               }
   
               RowLayout {
-                visible: modelData.media.canSeek && modelData.media.length > 0
+                visible: media.canSeek && media.length > 0
                 Layout.fillWidth: true
                 spacing: Style.space(8)
   
                 Text {
-                  text: Model.mediaTime(mediaProgress.dragging ? mediaProgress.liveValue : modelData.media.position)
+                  text: Model.mediaTime(mediaProgress.dragging ? mediaProgress.liveValue : media.position)
                   color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
@@ -420,15 +426,15 @@ Panel {
                   Layout.fillWidth: true
                   bar: root.bar
                   minimum: 0
-                  maximum: Math.max(1000, modelData.media.length)
+                  maximum: Math.max(1000, media.length)
                   step: 1000
                   integer: true
-                  value: modelData.media.position
+                  value: media.position
                   onReleased: function(v) { phone.mediaSeek(modelData.id, v) }
                 }
   
                 Text {
-                  text: Model.mediaTime(modelData.media.length)
+                  text: Model.mediaTime(media.length)
                   color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
@@ -454,12 +460,12 @@ Panel {
                   maximum: 100
                   step: 5
                   integer: true
-                  value: modelData.media.volume
+                  value: media.volume
                   onReleased: function(v) { phone.mediaVolume(modelData.id, v) }
                 }
   
                 Text {
-                  text: Math.round(mediaVolume.dragging ? mediaVolume.liveValue : modelData.media.volume) + "%"
+                  text: Math.round(mediaVolume.dragging ? mediaVolume.liveValue : media.volume) + "%"
                   color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
