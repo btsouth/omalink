@@ -352,22 +352,26 @@ printf '\xff\xd8\xff\xe0jpegbytes' >"$cache_root/photo.jpg"
 { printf '\x7fELF'; head -c 32 /dev/zero; } >"$cache_root/disguised.jpg"
 printf '[Desktop Entry]\nExec=/bin/sh\n' >"$cache_root/evil.desktop"
 printf '#!/bin/sh\necho hi\n' >"$cache_root/evil.sh"
+printf '<html><body><img src="http://192.168.1.1/beacon.png"></body></html>' >"$cache_root/page.html"
+printf '[InternetShortcut]\nURL=http://192.168.1.1/\n' >"$cache_root/shortcut.url"
 printf '#!/bin/sh\necho BOOM\n' >"$cache_root/unreadable.bin"
 chmod 000 "$cache_root/unreadable.bin"
 : >"$temp_dir/xdg-open.log"
 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment-open "$cache_root/photo.jpg"
 sleep 0.3
 grep -q "open $cache_root/photo.jpg" "$temp_dir/xdg-open.log"
-for refused in "$cache_root/disguised.jpg" "$cache_root/evil.desktop" "$cache_root/evil.sh" "$cache_root/unreadable.bin" "$temp_dir/outside.png"; do
+for refused in "$cache_root/disguised.jpg" "$cache_root/evil.desktop" "$cache_root/evil.sh" "$cache_root/unreadable.bin" "$cache_root/page.html" "$cache_root/shortcut.url" "$art_dir/evil.svg" "$temp_dir/outside.png"; do
   if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment-open "$refused" >/dev/null 2>&1; then
     echo "opening $refused was accepted" >&2
     exit 1
   fi
 done
-if grep -q 'evil\.\|disguised\|unreadable' "$temp_dir/xdg-open.log"; then
-  echo "a file that would run was handed to the desktop" >&2
+if grep -q 'evil\.\|disguised\|unreadable\|page\.html\|shortcut' "$temp_dir/xdg-open.log"; then
+  echo "a refused file was handed to the desktop" >&2
   exit 1
 fi
+saved_page="$(HOME="$saved_home" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment-save "$cache_root/page.html")"
+[[ $saved_page == "$saved_home/Downloads/page.html" && -f $saved_page ]]
 if HOME="$saved_home" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment-save "$cache_root/evil.sh" >/dev/null 2>&1; then
   echo "saving a file the phone made runnable was accepted" >&2
   exit 1

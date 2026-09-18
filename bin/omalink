@@ -770,12 +770,16 @@ attachment_save() {
   source="$(phone_local_path "$source" "$attachment_max_bytes")"
   [[ -n $source ]] || usage
   # Saving a file the phone made runnable only moves the problem into the
-  # Downloads folder, where a later click runs it.
+  # Downloads folder, where a later click runs it. A page is safe to keep, so
+  # only opening it is refused.
   kind="$(attachment_content_kind "$source")"
-  if [[ $kind != other ]]; then
-    echo "OmaLink will not save this attachment from the phone ($kind)" >&2
-    exit 1
-  fi
+  case $kind in
+    other | "web page") ;;
+    *)
+      echo "OmaLink will not save this attachment from the phone ($kind)" >&2
+      exit 1
+      ;;
+  esac
   downloads="$(xdg-user-dir DOWNLOAD 2>/dev/null || true)"
   [[ -n $downloads && $downloads != "$HOME" ]] || downloads="$HOME/Downloads"
   mkdir -p "$downloads"
@@ -808,6 +812,12 @@ attachment_content_kind() {
       printf 'program'
       return 0
       ;;
+    # A page or a shortcut opens in the browser and fetches whatever the phone
+    # put in it, which is a request the user did not ask for.
+    *.html | *.htm | *.xhtml | *.svg | *.mhtml | *.url | *.webloc)
+      printf 'web page'
+      return 0
+      ;;
   esac
   magic="$(head -c 16 -- "$path" 2>/dev/null | od -An -tx1 | tr -d ' \n')"
   # Nothing readable to judge by: refuse rather than hand it to the desktop.
@@ -819,6 +829,7 @@ attachment_content_kind() {
     7f454c46* | 4d5a* | fecdfaed* | fecdfaef* | cefaedfe* | cafebabe*) printf 'program' ;;  # ELF, PE, Mach-O, Java
     2321*) printf 'script' ;;                                                               # #!
     5b4465736b746f7020456e7472795d*) printf 'desktop entry' ;;                             # [Desktop Entry]
+    3c21444f4354595045* | 3c68746d6c* | 3c737667*) printf 'web page' ;;                    # <!DOCTYPE, <html, <svg
     *) printf 'other' ;;
   esac
 }

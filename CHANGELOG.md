@@ -10,7 +10,7 @@
 - The notification watcher reaps only the dbus-monitor it orphaned, by pid and command check, instead of pattern-killing every matching process on the session bus.
 - Security: a phone that posts hundreds of notifications can no longer stall the bar. Each refresh reads at most 100 notifications and shows at most 25, since every other field needed costs a D-Bus read.
 - Security: the conversation list and each message thread are capped at the newest 200 entries, so the phone cannot decide how much data the shell has to hold and filter.
-- Security: files the phone made runnable are refused by Save to Downloads as well as Open, and an attachment whose contents cannot be read is refused rather than handed to the desktop.
+- Security: files the phone made runnable are refused by Save to Downloads as well as Open, an attachment whose contents cannot be read is refused rather than handed to the desktop, and opening a web page or shortcut the phone sent (HTML, SVG, .url) is refused because the browser would fetch whatever it contains. Saving a page is still allowed.
 - Fix: attachment thumbnails are base64 wrapped across lines, so the new size and shape check rejected every real thumbnail. Whitespace is stripped before the checks now.
 - Fix: the panel's media section read the phone's player even when nothing was playing, which filled the journal with "Cannot read property of null" errors.
 

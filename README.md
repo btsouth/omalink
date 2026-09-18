@@ -122,8 +122,10 @@ URL, or an attachment.
 - Attachments can be opened or saved only from KDE Connect's download
   directory. Both actions go through OmaLink's own helper, which refuses files
   the phone sent that would run (programs, scripts, and desktop entries, judged
-  by content as well as name) and files whose contents cannot be read; anything
-  else is handed to your default application or saved to Downloads.
+  by content as well as name), files whose contents cannot be read, and pages or
+  shortcuts that would make your browser fetch something the phone chose.
+  Saving a page is still allowed; anything else is handed to your default
+  application or saved to Downloads.
 - The phone decides how much data there is, so the lists are bounded: each
   refresh reads at most 100 notifications and shows at most 25, and the
   conversation list and message threads carry the newest 200 entries. An app
