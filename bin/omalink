@@ -26,6 +26,15 @@ icon_max_bytes=$((1 * 1024 * 1024))
 # Attachments are photos, videos and documents from the phone: a cap small
 # enough to reject a real video would be a bug, so this only refuses the absurd.
 attachment_max_bytes=$((2 * 1024 * 1024 * 1024))
+# Text and thumbnails come from the phone too, so their lengths are bounded
+# before anything is copied or laid out.
+title_max_chars=1024
+body_max_chars=8192
+preview_max_chars=1024
+thumbnail_max_chars=262144
+attachments_per_message=10
+contacts_max=2000
+capture_max_bytes=$((16 * 1024 * 1024))
 # How much of a phone's notification list is read per refresh. Each notification
 # costs several D-Bus reads, and the count is entirely the phone's to choose, so
 # an app posting thousands of them must not be able to stall the bar.
@@ -40,11 +49,20 @@ messages_max=200
 # cache directory (album art, downloaded attachments) and its per-user
 # notification icon directory.
 phone_file_roots() {
-  local user="${USER:-$(id -un)}" home="${HOME:-}"
+  local user="${USER:-$(id -un)}" login home="${HOME:-}"
+  login="$(id -un)"
+  # Both cache locations, because the daemon reads XDG_CACHE_HOME from its own
+  # environment, and both user names, because a daemon started with a stale USER
+  # writes to the other directory. Rejection is silent either way, so a narrower
+  # list costs a user their album art with no explanation.
   printf '%s\n' \
     "${XDG_CACHE_HOME:-$home/.cache}/kdeconnect.daemon" \
+    "$home/.cache/kdeconnect.daemon" \
     "${TMPDIR:-/tmp}/kdeconnect_$user" \
-    "/tmp/kdeconnect_$user"
+    "${TMPDIR:-/tmp}/kdeconnect_$login" \
+    "/tmp/kdeconnect_$user" \
+    "/tmp/kdeconnect_$login" \
+    | sort -u
 }
 
 percent_decode() {
@@ -69,13 +87,17 @@ percent_decode() {
 
 # Canonical path of "$1" when it is a regular file inside one of the KDE
 # Connect directories and no larger than "$2" bytes; empty otherwise. Symlinks
-# are resolved first, so a link planted inside those directories cannot point
-# at something else.
+# are resolved first, so a link planted inside those directories cannot point at
+# something else, and a second hard link is refused because the same inode can
+# then be reached from outside them. Rejection is an empty result, not a status:
+# call sites test the value, and a caller that tested $? would fail open.
 phone_file() {
-  local path="$1" limit="$2" real root size
+  local path="$1" limit="$2" real root size links
   [[ -n $path && $limit =~ ^[0-9]+$ ]] || return 0
   real="$(readlink -f -- "$path" 2>/dev/null || true)"
   [[ -n $real && -f $real ]] || return 0
+  links="$(stat -c %h -- "$real" 2>/dev/null || printf '1')"
+  [[ $links =~ ^[0-9]+$ && $links -le 1 ]] || return 0
   while IFS= read -r root; do
     root="$(readlink -f -- "$root" 2>/dev/null || true)"
     [[ -n $root && $real == "$root"/* ]] || continue
@@ -125,6 +147,16 @@ phone_image_path() {
   [[ -n $path ]] || return 0
   raster_image "$path" || return 0
   printf '%s' "$path"
+}
+
+# Phone text is shown, never trusted, and never allowed to be arbitrarily long.
+truncate_text() {
+  local value="${1:-}" limit="${2:-1024}"
+  if (( ${#value} > limit )); then
+    printf '%s' "${value:0:limit}"
+  else
+    printf '%s' "$value"
+  fi
 }
 
 # Every value below arrives as text over D-Bus, so an unexpected one would make
@@ -204,8 +236,8 @@ notification_json() {
     internal_id="$(dbus_json_property "$notification_path" internalId)"
     notification_allowed "$app_name" "$internal_id" || continue
     kept_count=$((kept_count + 1))
-    title="$(dbus_json_property "$notification_path" title)"
-    text="$(dbus_json_property "$notification_path" text)"
+    title="$(truncate_text "$(dbus_json_property "$notification_path" title)" "$title_max_chars")"
+    text="$(truncate_text "$(dbus_json_property "$notification_path" text)" "$body_max_chars")"
     icon_path="$(phone_image_path "$(dbus_json_property "$notification_path" iconPath)" "$icon_max_bytes")"
     dismissable="$(boolean_or "$(dbus_json_property "$notification_path" dismissable)" false)"
     reply_id="$(dbus_json_property "$notification_path" replyId)"
@@ -326,7 +358,7 @@ media_json() {
 
 ring() {
   local device_id="${1:-}"
-  [[ -n $device_id ]] || usage
+  [[ $device_id =~ ^[A-Za-z0-9]+$ ]] || usage
   command -v kdeconnect-cli >/dev/null 2>&1 || {
     echo "KDE Connect is not installed" >&2
     exit 1
@@ -336,7 +368,7 @@ ring() {
 
 send_clipboard() {
   local device_id="${1:-}"
-  [[ -n $device_id ]] || usage
+  [[ $device_id =~ ^[A-Za-z0-9]+$ ]] || usage
   command -v kdeconnect-cli >/dev/null 2>&1 || {
     echo "KDE Connect is not installed" >&2
     exit 1
@@ -448,8 +480,8 @@ handle_posted() {
   app_name="$(dbus_json_property "$notification_path" appName)"
   internal_id="$(dbus_json_property "$notification_path" internalId)"
   notification_allowed "$app_name" "$internal_id" || return 0
-  title="$(dbus_json_property "$notification_path" title)"
-  text="$(dbus_json_property "$notification_path" text)"
+  title="$(truncate_text "$(dbus_json_property "$notification_path" title)" "$title_max_chars")"
+  text="$(truncate_text "$(dbus_json_property "$notification_path" text)" "$body_max_chars")"
   is_conversation="$(dbus_json_property "$notification_path" isConversation)"
   icon_path="$(phone_image_path "$(dbus_json_property "$notification_path" iconPath)" "$icon_max_bytes")"
   # A notification dismissed between the signal and this read has no fields
@@ -506,8 +538,13 @@ watch() {
   # the lock, the rest block here as standbys and take over if it dies. Child
   # processes must not inherit the lock fd (9>&-) or a stray would keep it.
   local runtime="${XDG_RUNTIME_DIR:-/tmp}"
-  local pid_file="$runtime/omalink-watch.pid" stale
-  exec 9>"$runtime/omalink-watch.lock"
+  local pid_file="$runtime/omalink-watch.pid" stale lock_file="$runtime/omalink-watch.lock"
+  # With no runtime dir this lands in a world-writable directory, so a symlink
+  # planted under our name must not become a file we write through.
+  if [[ -L $lock_file ]]; then
+    rm -f "$lock_file"
+  fi
+  exec 9>"$lock_file"
   flock 9
   # Holding the lock means no other watcher is alive, so a pid left in the file
   # belongs to a dbus-monitor orphaned by a killed watcher (the shell kills the
@@ -521,6 +558,9 @@ watch() {
     rm -f "$pid_file"
   fi
   ensure_quiet_daemon_popups || true
+  if [[ -L $pid_file ]]; then
+    rm -f "$pid_file"
+  fi
   local line device_id="" notification_id
   while IFS= read -r line; do
     case $line in
@@ -542,6 +582,8 @@ watch() {
     2>/dev/null 9>&- &
     printf '%s\n' "$!" >"$pid_file"
     wait)
+  # Load-bearing: handle_posted runs in the background, and this is what makes
+  # the output of the popup work land before the watcher reports it is done.
   wait
 }
 
@@ -590,10 +632,11 @@ contact_records_json() {
     /^TEL[;:]/ { phones[++phone_count] = value() }
     /^END:VCARD/ {
       gsub(/[\t\r\n]/, " ", name)
+      if (length(name) > 256) name = substr(name, 1, 256)
       for (i = 1; i <= phone_count; i++) if (name != "") print phones[i] "\t" name
       delete phones
     }
-  ' "$contact_dir"/*.vcf | jq -Rsc '
+  ' "$contact_dir"/*.vcf | head -n "$contacts_max" | jq -Rsc '
     split("\n")
     | map(select(length > 0) | split("\t") | {number: .[0], name: .[1]})
     | unique_by(.number)
@@ -659,19 +702,24 @@ conversations() {
       . as $address | ($address | number_key) as $key | $contactNames[$key] // $address;
     [.data[0][]? | .data as $message | {
       threadId: $message[6],
-      preview: $message[1],
+      preview: (($message[1] // "") | tostring | .[0:$previewMax]),
       addresses: ([$message[2][]?[0]] | unique),
       names: ([$message[2][]?[0] | display_name] | unique),
       timestamp: $message[3],
       unread: ($message[5] == 0),
       incoming: ($message[4] == 1),
       attachmentCount: ($message[9] | length),
-      attachments: [$message[9][]? | {partId: .[0], mimeType: .[1], thumbnail: .[2], unique: .[3]}]
+      attachments: [$message[9][]? | {
+        partId: .[0], mimeType: .[1],
+        thumbnail: (if ((.[2] // "") | tostring | length) <= $thumbMax then (.[2] // "") else "" end),
+        unique: .[3]
+      }][0:$attachmentsMax]
     }]
     | sort_by(.timestamp)
     | reverse
     | .[0:$threadsMax]
-  ' --argjson threadsMax "$threads_max" <<<"$raw"
+  ' --argjson threadsMax "$threads_max" --argjson thumbMax "$thumbnail_max_chars" \
+    --argjson attachmentsMax "$attachments_per_message" --argjson previewMax "$preview_max_chars" <<<"$raw"
 }
 
 messages() {
@@ -688,7 +736,9 @@ messages() {
   }
   trap cleanup_messages RETURN
 
-  stdbuf -oL busctl --user --verbose --json=short monitor -- org.kde.kdeconnect >"$capture_file" &
+  # head ends the stream at the cap, and the writer dies on SIGPIPE, so a phone
+  # flooding the bus cannot fill the capture directory.
+  stdbuf -oL busctl --user --verbose --json=short monitor -- org.kde.kdeconnect >"$capture_file" 2>/dev/null &
   monitor_pid=$!
   sleep 0.1
   timeout 12s busctl --user call -- org.kde.kdeconnect "$device_path" \
@@ -708,20 +758,26 @@ messages() {
       | .payload.data[0].data
       | select(.[6] == $threadId)
       | {
-          body: .[1],
+          body: ((.[1] // "") | tostring | .[0:$bodyMax]),
           timestamp: .[3],
           incoming: (.[4] == 1),
           attachmentCount: (.[9] | length),
-          attachments: [.[9][]? | {partId: .[0], mimeType: .[1], thumbnail: .[2], unique: .[3]}]
+          attachments: [.[9][]? | {
+            partId: .[0], mimeType: .[1],
+            thumbnail: (if ((.[2] // "") | tostring | length) <= $thumbMax then (.[2] // "") else "" end),
+            unique: .[3]
+          }][0:$attachmentsMax]
         }]
     | unique_by(.timestamp, .body, ([.attachments[].unique] | join("|")))
     | sort_by(.timestamp)
     | .[-$messagesMax:]
-  ' --argjson messagesMax "$messages_max" "$capture_file"
+  ' --argjson messagesMax "$messages_max" --argjson bodyMax "$body_max_chars" \
+    --argjson thumbMax "$thumbnail_max_chars" --argjson attachmentsMax "$attachments_per_message" \
+    "$capture_file"
 }
 
 attachment() {
-  local device_id="${1:-}" part_id="${2:-}" unique="${3:-}" device_path capture_dir capture_file monitor_pid path arrived attempt
+  local device_id="${1:-}" part_id="${2:-}" unique="${3:-}" mode="${4:-}" device_path capture_dir capture_file monitor_pid path arrived attempt
   [[ $device_id =~ ^[A-Za-z0-9]+$ && $part_id =~ ^-?[0-9]+$ && $unique =~ ^[[:print:]]+$ && $unique != -* ]] || usage
   device_path="/modules/kdeconnect/devices/$device_id"
   capture_dir="$(mktemp -d)"
@@ -734,7 +790,7 @@ attachment() {
   }
   trap cleanup_attachment RETURN
 
-  stdbuf -oL busctl --user --json=short monitor -- org.kde.kdeconnect >"$capture_file" &
+  stdbuf -oL busctl --user --json=short monitor -- org.kde.kdeconnect >"$capture_file" 2>/dev/null &
   monitor_pid=$!
   sleep 0.1
   busctl --user call -- org.kde.kdeconnect "$device_path" \
@@ -750,6 +806,11 @@ attachment() {
       | .payload.data[0]
     ' "$capture_file" 2>/dev/null | head -n 1)"
     [[ -z $path ]] || break
+    # A phone that floods the bus with signals could otherwise fill the capture
+    # directory (tmpfs) for as long as this loop waits.
+    if (( $(stat -c %s -- "$capture_file" 2>/dev/null || printf '0') > capture_max_bytes )); then
+      break
+    fi
     sleep 0.5
   done
 
@@ -764,6 +825,15 @@ attachment() {
       echo "Attachment did not arrive from the phone" >&2
     fi
     exit 1
+  fi
+  # The panel asks for image mode when the phone called the attachment an image,
+  # so what reaches Qt's image loader is a raster file rather than whatever the
+  # phone chose to send under that name.
+  if [[ $mode == image ]]; then
+    raster_image "$path" || {
+      echo "Attachment is not the image the phone said it was" >&2
+      exit 1
+    }
   fi
   printf '%s\n' "$path"
 }
@@ -807,8 +877,28 @@ attachment_save() {
 # handing a phone-chosen file to the desktop default application. That is what
 # the user asked for by clicking it, but a program is not: files that would run
 # are refused, and anything else goes to the user's own handler.
+# The handler for a file is chosen from its mime type, so the mime type is what
+# decides whether opening it is safe. shared-mime-info is forgiving about case,
+# leading whitespace and a byte order mark, and the phone chooses all three, so
+# this is asked first and the content scan below is normalized to match.
+attachment_mime_kind() {
+  local path="$1" mime
+  command -v xdg-mime >/dev/null 2>&1 || return 1
+  mime="$(xdg-mime query filetype "$path" 2>/dev/null)" || return 1
+  [[ -n $mime ]] || return 1
+  case ${mime,,} in
+    text/html | application/xhtml+xml | image/svg+xml)
+      printf 'web page'
+      ;;
+    application/x-desktop | application/x-executable | application/x-sharedlib | application/x-shellscript | application/x-ms-dos-executable | application/x-msdownload | application/vnd.microsoft.portable-executable | application/x-java-archive | application/vnd.debian.binary-package | application/x-rpm)
+      printf 'program'
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 attachment_content_kind() {
-  local path="$1" magic name
+  local path="$1" magic name text kind
   name="${path##*/}"
   case ${name,,} in
     *.desktop | *.lnk | *.scr | *.appimage | *.exe | *.msi | *.bat | *.cmd | *.ps1 | *.sh | *.bash | *.zsh | *.py | *.pl | *.rb | *.jar | *.deb | *.rpm)
@@ -822,6 +912,10 @@ attachment_content_kind() {
       return 0
       ;;
   esac
+  if kind="$(attachment_mime_kind "$path")"; then
+    printf '%s' "$kind"
+    return 0
+  fi
   magic="$(head -c 16 -- "$path" 2>/dev/null | od -An -tx1 | tr -d ' \n')"
   # Nothing readable to judge by: refuse rather than hand it to the desktop.
   [[ -n $magic ]] || {
@@ -829,12 +923,23 @@ attachment_content_kind() {
     return 0
   }
   case $magic in
-    7f454c46* | 4d5a* | fecdfaed* | fecdfaef* | cefaedfe* | cafebabe*) printf 'program' ;;  # ELF, PE, Mach-O, Java
-    2321*) printf 'script' ;;                                                               # #!
-    5b4465736b746f7020456e7472795d*) printf 'desktop entry' ;;                             # [Desktop Entry]
-    3c21444f4354595045* | 3c68746d6c* | 3c737667*) printf 'web page' ;;                    # <!DOCTYPE, <html, <svg
-    *) printf 'other' ;;
+    7f454c46* | 4d5a* | fecdfaed* | fecdfaef* | cefaedfe* | cafebabe*)  # ELF, PE, Mach-O, Java
+      printf 'program'
+      return 0
+      ;;
+    *) ;;
   esac
+  # Text markers are matched after dropping a byte order mark, leading whitespace
+  # and case, the three things shared-mime-info forgives.
+  text="$(head -c 256 -- "$path" 2>/dev/null | tr -d '\0')"
+  text="${text#$'\xef\xbb\xbf'}"
+  text="${text#"${text%%[![:space:]]*}"}"
+  case ${text,,} in
+    '<!doctype html'* | '<html'* | '<svg'*) printf 'web page'; return 0 ;;
+    '[desktop entry]'*) printf 'desktop entry'; return 0 ;;
+    '#!'*) printf 'script'; return 0 ;;
+  esac
+  printf 'other'
 }
 
 open_attachment() {
@@ -939,7 +1044,7 @@ case "${1:-}" in
   contacts) shift; contacts "${1:-}" ;;
   conversations) shift; conversations "${1:-}" ;;
   messages) shift; messages "${1:-}" "${2:-}" ;;
-  attachment) shift; attachment "${1:-}" "${2:-}" "${3:-}" ;;
+  attachment) shift; attachment "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
   attachment-open) shift; open_attachment "${1:-}" ;;
   attachment-save) shift; attachment_save "${1:-}" ;;
   reply) shift; reply "${1:-}" "${2:-}" "${3:-}" ;;

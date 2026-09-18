@@ -22,6 +22,12 @@
 - Fix: attachments are capped at 2 GB instead of 64 MB, which refused real phone video and described it as unsafe to open. Album art is capped at 8 MB instead of 5 MB, because KDE Connect decompresses what it transfers, so the file on disk can be larger than the 5 MiB it accepts on the wire.
 - Fix: an unset `HOME` no longer makes the helper fail with "unbound variable" on the status path.
 - Tests: the notification read cap and the symlink canonicalization are pinned now (raising the cap or dropping `readlink -f` fails the suite), and the symlink fixtures point at a real image outside the roots so the raster check cannot mask whether the path was canonicalized.
+- Security: opening an attachment is classified the way the desktop classifies it. The mime type decides first, and the content scan now skips a byte order mark and leading whitespace and ignores case, which closes the bypasses the review found (a lower case `<!doctype html>`, a leading newline before `<html>`, upper case `<SVG`, a BOM before `[Desktop Entry]`) that let the browser fetch URLs the phone chose.
+- Security: everything a phone can inflate is bounded now. Message and notification text is capped (8 KiB and 1 KiB), a thread carries at most ten attachments with thumbnails up to 256 KiB, the capture the watcher reads is capped at 16 MiB, and contacts are capped at 2000 with 256-character names.
+- Security: `ring` and `clipboard` validate the device id like every other subcommand, and a file with more than one hard link is refused, since the same inode could then be reached from outside the KDE Connect directories.
+- Security: the full size viewer asks for image mode, so an attachment only reaches the image loader when its contents really are a raster image rather than whatever the phone called it.
+- Fix: the notification read cap (100 per device) and the raster check on notification icons are pinned by tests, and the watcher's orphan reaping is exercised against a process that really is named dbus-monitor.
+- Tests: `tests/qml.test.sh` walks QML element blocks now, so removing a `Text.PlainText`, removing a `sourceSize` bound, feeding an Image from raw phone data, assigning `Image.source` imperatively, or adding `textFormat` to an element that does not have it all fail the suite.
 
 ## 0.2.0 - 2026-09-15
 

@@ -223,7 +223,8 @@ Item {
     error = ""
     attachmentFetchUnique = unique
     attachmentFetchMode = isImage ? "view" : "open"
-    attachmentProcess.command = [helperPath, "attachment", deviceId, String(attachment.partId), unique]
+    attachmentProcess.command = [helperPath, "attachment", deviceId, String(attachment.partId), unique,
+      isImage ? "image" : "file"]
     attachmentProcess.running = true
   }
 
@@ -690,6 +691,7 @@ Item {
                     }
                     Text {
                       text: Model.relativeTime(modelData.timestamp, root.nowMs)
+                      textFormat: Text.PlainText
                       color: root.dim
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.caption
@@ -898,6 +900,7 @@ Item {
                     text: modelData.pending
                       ? "Syncing…"
                       : Model.relativeTime(modelData.timestamp, root.nowMs)
+                    textFormat: Text.PlainText
                     color: modelData.incoming ? root.dim : Color.menu.selectedText
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption

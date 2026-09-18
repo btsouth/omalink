@@ -46,6 +46,10 @@ if [[ " $* " == *" replyToConversation "* || " $* " == *" sendReply "* || " $* "
   exit 0
 fi
 if [[ " $* " == *" monitor "* ]]; then
+  if [[ -n ${OMALINK_TEST_HUGE_BODY:-} ]]; then
+    bigbody="$(head -c 20000 /dev/zero | tr '\0' 'B')"
+    printf '{"type":"signal","interface":"org.kde.kdeconnect.device.conversations","member":"conversationUpdated","payload":{"data":[{"data":[1,"%s",[["+155****0001"]],1,1,0,7,10,-1,[]]}]}}\n' "$bigbody"
+  fi
   if [[ -n ${OMALINK_TEST_MANY_MESSAGES:-} ]]; then
     for index in $(seq 1 300); do
       printf '{"type":"signal","interface":"org.kde.kdeconnect.device.conversations","member":"conversationUpdated","payload":{"data":[{"data":[1,"body %s",[["+155****0001"]],%s,1,0,7,10,-1,[]]}]}}\n' \
@@ -109,7 +113,16 @@ case "${*: -1}" in
     fi
     ;;
   activeConversations)
-    if [[ -n ${OMALINK_TEST_MANY_THREADS:-} ]]; then
+    if [[ -n ${OMALINK_TEST_MANY_ATTACHMENTS:-} ]]; then
+      # Three chunks, because a single argument is capped at 128 KB.
+      chunk="$(head -c 100000 /dev/zero | tr '\0' 'A')"
+      printf '{"type":"av","data":[[{"type":"(isa(s)xiixixa(xsss))","data":[1,"Many",[["+155****0001"]],2000,1,0,7,10,-1,['
+      for index in $(seq 1 40); do
+        [[ $index == 1 ]] || printf ','
+        printf '[%s,"image/jpeg","%s%s%s","PART_%s.jpeg"]' "$index" "$chunk" "$chunk" "$chunk" "$index"
+      done
+      printf ']]}]]}\n'
+    elif [[ -n ${OMALINK_TEST_MANY_THREADS:-} ]]; then
       printf '{"type":"av","data":[['
       for index in $(seq 1 300); do
         printf '{"type":"(isa(s)xiixixa(xsss))","data":[1,"Thread %s",[["+155****%04d"]],%s,1,0,%s,10,-1,[]]},' \
@@ -268,6 +281,10 @@ jq -e --arg art "$art_dir/art.jpg" '.devices[0].media == {player: "Apple Music",
 jq -e '.devices[1].media == null' <<<"$status" >/dev/null
 jq -e --arg icon "$icon_dir/abc123" '.devices[0].notifications[0].iconPath == $icon and .devices[0].notifications[1].iconPath == ""' <<<"$status" >/dev/null
 jq -e '.devices[0].notifications[0] | .title == "Phone title" and .text == "Phone text" and .isConversation == true and .dismissable == false' <<<"$status" >/dev/null
+if OMALINK_TEST_ICON_PATH="$icon_dir/notraster" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" status | jq -r '.devices[0].notifications[0].iconPath' | grep -q .; then
+  echo "a notification icon that is not an image was accepted" >&2
+  exit 1
+fi
 
 # Album art and notification icons come from the phone: only local files under
 # KDE Connect's directories, verified as small raster images, are accepted.
@@ -341,11 +358,23 @@ many_messages="$(OMALINK_TEST_MANY_MESSAGES=1 PATH="$temp_dir:/usr/bin" "$projec
 jq -e 'length == 200 and .[-1].body == "body 300" and .[0].body == "body 101"' <<<"$many_messages" >/dev/null
 thread_messages="$(PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" messages abc123 7)"
 jq -e 'length == 0' <<<"$thread_messages" >/dev/null
+many_attachments="$(OMALINK_TEST_MANY_ATTACHMENTS=1 XDG_DATA_HOME="$temp_dir/data" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" conversations abc123)"
+jq -e '.[0].attachmentCount == 40 and (.[0].attachments | length) == 10
+  and ([.[0].attachments[].thumbnail] | all(. == ""))' <<<"$many_attachments" >/dev/null
+[[ ${#many_attachments} -lt 100000 ]]
+huge_body="$(OMALINK_TEST_HUGE_BODY=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" messages abc123 7)"
+jq -e 'length == 1 and (.[0].body | length) == 8192' <<<"$huge_body" >/dev/null
 rm -f "$temp_dir/busctl.requested"
 cold_conversations="$(COLD_CONVERSATION_CACHE=1 XDG_DATA_HOME="$temp_dir/data" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" conversations abc123)"
 jq -e 'length == 2 and .[0].threadId == 7' <<<"$cold_conversations" >/dev/null
 [[ -e "$temp_dir/busctl.requested" ]]
 attachment_path="$(PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment abc123 42 PART_1.jpeg)"
+image_path="$(OMALINK_TEST_ATTACHMENT="$art_dir/art.jpg" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment abc123 42 PART_1.jpeg image)"
+[[ $image_path == "$art_dir/art.jpg" ]]
+if OMALINK_TEST_ATTACHMENT="$cache_root/notreally.png" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment abc123 42 PART_1.jpeg image >/dev/null 2>&1; then
+  echo "an attachment the phone called an image was loaded as one" >&2
+  exit 1
+fi
 [[ $attachment_path == "$attachment_fixture" ]]
 if OMALINK_TEST_ATTACHMENT=/etc/hostname PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment abc123 42 PART_1.jpeg >/dev/null 2>&1; then
   echo "an attachment outside the KDE Connect directories was accepted" >&2
@@ -370,13 +399,16 @@ printf '[Desktop Entry]\nExec=/bin/sh\n' >"$cache_root/evil.desktop"
 printf '#!/bin/sh\necho hi\n' >"$cache_root/evil.sh"
 printf '<html><body><img src="http://192.168.1.1/beacon.png"></body></html>' >"$cache_root/page.html"
 printf '[InternetShortcut]\nURL=http://192.168.1.1/\n' >"$cache_root/shortcut.url"
+printf '<!doctype html><img src="http://192.168.1.1/beacon.png">' >"$cache_root/lower.bin"
+printf 'not an image at all' >"$icon_dir/notraster"
+printf 'this is text the phone called a photo' >"$cache_root/notreally.png"
 printf '#!/bin/sh\necho BOOM\n' >"$cache_root/unreadable.bin"
 chmod 000 "$cache_root/unreadable.bin"
 : >"$temp_dir/xdg-open.log"
 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment-open "$cache_root/photo.jpg"
 sleep 0.3
 grep -q "open $cache_root/photo.jpg" "$temp_dir/xdg-open.log"
-for refused in "$cache_root/disguised.jpg" "$cache_root/evil.desktop" "$cache_root/evil.sh" "$cache_root/unreadable.bin" "$cache_root/page.html" "$cache_root/shortcut.url" "$art_dir/evil.svg" "$temp_dir/outside.png"; do
+for refused in "$cache_root/disguised.jpg" "$cache_root/evil.desktop" "$cache_root/evil.sh" "$cache_root/unreadable.bin" "$cache_root/page.html" "$cache_root/lower.bin" "$cache_root/shortcut.url" "$art_dir/evil.svg" "$temp_dir/outside.png"; do
   if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment-open "$refused" >/dev/null 2>&1; then
     echo "opening $refused was accepted" >&2
     exit 1
@@ -408,12 +440,22 @@ if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment abc123 notanu
   echo "invalid attachment part id was accepted" >&2
   exit 1
 fi
-for option_like in '--address=tcp:host=127.0.0.1,port=1' '--host=attacker@evil.example' '-1'; do
-  if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment abc123 42 "$option_like" >/dev/null 2>&1; then
-    echo "an attachment name that looks like an option was accepted: $option_like" >&2
+# A value that looks like an option has to be rejected as an argument, not
+# quietly fail later on: exit 2 is the usage rejection.
+expect_usage() {
+  local rc=0
+  PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" "$@" >/dev/null 2>&1 || rc=$?
+  if [[ $rc != 2 ]]; then
+    echo "expected an argument rejection for [$*], got exit $rc" >&2
     exit 1
   fi
-done
+}
+expect_usage attachment abc123 42 '--address=tcp:host=127.0.0.1,port=1'
+expect_usage attachment abc123 42 '--host=attacker@evil.example'
+expect_usage attachment abc123 42 '-1'
+expect_usage dismiss abc123 '--user'
+expect_usage ring '--user'
+expect_usage clipboard '--user'
 if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" media '../bad' >/dev/null 2>&1; then
   echo "invalid media device id was accepted" >&2
   exit 1
@@ -485,6 +527,18 @@ grep -q 'ipc call omalink.phone.DP-9 open' "$temp_dir/qs.log"
 quiet_out="$(XDG_RUNTIME_DIR="$temp_dir" XDG_CONFIG_HOME="$temp_dir/xdg" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" watch --popups off)"
 [[ $quiet_out == $'posted abc123 notif.9\nposted abc123 notif.10\nposted abc123 notif.11' ]]
 [[ ! -s "$temp_dir/notify-send.log" ]]
+
+# An orphaned monitor is reaped, and only when it really is one.
+bash -c 'exec -a dbus-monitor sleep 60' &
+orphan=$!
+printf '%s\n' "$orphan" >"$temp_dir/omalink-watch.pid"
+: >"$temp_dir/notify-send.log"
+XDG_RUNTIME_DIR="$temp_dir" XDG_CONFIG_HOME="$temp_dir/xdg" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" watch >/dev/null
+if kill -0 "$orphan" 2>/dev/null; then
+  echo "the watcher left its orphaned monitor running" >&2
+  kill "$orphan" 2>/dev/null || true
+  exit 1
+fi
 if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" sms abc123 'bad;number' "Test" >/dev/null 2>&1; then
   echo "invalid SMS destination was accepted" >&2
   exit 1

@@ -261,8 +261,12 @@ function attachmentLabel(mimeType) {
 
 function thumbnailUri(attachment) {
   // The phone sends this thumbnail; KDE Connect hands it over as base64 wrapped
-  // across lines, so whitespace comes out before the size and shape checks.
-  var thumbnail = String((attachment && attachment.thumbnail) || "").replace(/\s+/g, "")
+  // across lines, so whitespace comes out before the size and shape checks. The
+  // input length is checked first, because stripping whitespace from a string
+  // the phone chose is itself the expensive part.
+  var raw = String((attachment && attachment.thumbnail) || "")
+  if (raw.length > 4194304) return ""
+  var thumbnail = raw.replace(/\s+/g, "")
   if (thumbnail === "" || thumbnail.length > 1048576) return ""
   if (!/^[A-Za-z0-9+/=]+$/.test(thumbnail)) return ""
   // The decoded bytes decide the decoder, so the base64 prefix has to be a

@@ -111,9 +111,12 @@ URL, or an attachment.
 
 - Images from the phone (album art, notification icons, attachment previews)
   are loaded only when they are local files under KDE Connect's own cache and
-  icon directories, stay under a size limit (album art 8 MB, notification icons
-  1 MB), and are raster images (PNG, JPEG, GIF, BMP, WebP). Attachment
-  thumbnails are capped at 1 MB of base64 and must decode to a raster image. Remote URLs and other URI schemes, paths outside those
+  icon directories, stay under a size limit (album art 8 MiB, notification
+  icons 1 MiB), and are raster images (PNG, JPEG, GIF, BMP, WebP). Attachment
+  thumbnails must decode to a raster image, and a thread carries at most ten
+  attachments with thumbnails up to 256 KiB each. The full size viewer loads an
+  attachment only when its contents really are a raster image, whatever the
+  phone called it. Remote URLs and other URI schemes, paths outside those
   directories, symlinks that point elsewhere, oversized files, and SVG or other
   markup are all dropped, and the shell decodes them at a bounded size so a
   malicious image cannot exhaust memory.
@@ -121,16 +124,21 @@ URL, or an attachment.
   desktop popups, so notification contents cannot inject markup or make the
   popup daemon fetch something remote.
 - Attachments can be opened or saved only from KDE Connect's cache directory
-  (`~/.cache/kdeconnect.daemon`), which is where the daemon writes them. Both actions go through OmaLink's own helper, which refuses files
-  the phone sent that would run (programs, scripts, and desktop entries, judged
-  by content as well as name), files whose contents cannot be read, and pages or
-  shortcuts that would make your browser fetch something the phone chose.
+  (`~/.cache/kdeconnect.daemon`, where the daemon writes them) or its per-user
+  temporary icon directory. Both actions go through OmaLink's own helper, which refuses files
+  the phone sent that would run (programs, scripts, and desktop entries), files
+  whose contents cannot be read, and pages or shortcuts that would make your
+  browser fetch something the phone chose. That decision follows the mime type
+  the desktop itself would use, so case, leading whitespace and a byte order
+  mark cannot hide a page.
   Saving a page is still allowed; anything else is handed to your default
   application or saved to Downloads.
-- The phone decides how much data there is, so the lists are bounded: each
-  refresh reads at most 100 notifications and shows at most 25, and the
-  conversation list and message threads carry the newest 200 entries. An app
-  that posts or sends thousands cannot stall the bar or the message window.
+- The phone decides how much data there is, so everything is bounded: each
+  refresh reads at most 100 notifications and shows at most 25, the conversation
+  list and message threads carry the newest 200 entries, message and notification
+  text is capped (8 KiB and 1 KiB), contacts are capped at 2000, and the capture
+  the watcher reads is capped at 16 MiB. An app that posts or sends thousands
+  cannot stall the bar or fill memory.
 - OmaLink never builds a shell command out of phone data. Values passed to
   `kdeconnect-cli`, `busctl`, and the plugin's own helper are passed as single
   arguments and validated first, every `busctl` call separates its options with
@@ -146,9 +154,10 @@ folder.
 
 What the checks do not cover, on purpose: the phone still chooses the contents
 of the files it sends, so a validated image is untrusted data being decoded (the
-size caps and decode bounds limit what that costs), KDE Connect can rewrite a
-file in its own cache between the check and the load, and art in a format other
-than the five above shows the placeholder instead.
+size caps and decode bounds limit what that costs, and Qt's own image reader
+also refuses any single allocation over 256 MB), KDE Connect can rewrite a file
+in its own cache between the check and the load, and art in a format other than
+the five above shows the placeholder instead.
 
 ## Settings
 

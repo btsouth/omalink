@@ -238,6 +238,7 @@ Panel {
     
                   Text {
                     text: Model.batteryText(modelData)
+                    textFormat: Text.PlainText
                     color: root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
@@ -416,6 +417,7 @@ Panel {
   
                 Text {
                   text: Model.mediaTime(mediaProgress.dragging ? mediaProgress.liveValue : media.position)
+                  textFormat: Text.PlainText
                   color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
@@ -435,6 +437,7 @@ Panel {
   
                 Text {
                   text: Model.mediaTime(media.length)
+                  textFormat: Text.PlainText
                   color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
