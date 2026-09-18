@@ -466,9 +466,14 @@ handle_posted() {
 # target prints "Target not found." with exit 0, so success is empty output.
 open_panel() {
   local shell_dir="${OMARCHY_PATH:-/usr/share/omarchy}/shell" focused target result
+  local -a targets=("omalink.phone")
   focused="$(hyprctl -j monitors 2>/dev/null \
     | jq -r '[.[] | select(.focused == true) | .name][0] // empty' 2>/dev/null || true)"
-  for target in ${focused:+"omalink.phone.$focused"} "omalink.phone"; do
+  # A monitor name with a space in it used to split into two arguments here.
+  if [[ -n $focused ]]; then
+    targets=("omalink.phone.$focused" "${targets[@]}")
+  fi
+  for target in "${targets[@]}"; do
     result="$(qs -p "$shell_dir" ipc call "$target" open 2>&1 || true)"
     [[ -n $result ]] || return 0
   done
