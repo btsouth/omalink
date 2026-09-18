@@ -193,6 +193,14 @@ Item {
     newMessageProcess.running = true
   }
 
+  // Every route that opens a phone attachment outside OmaLink goes through the
+  // helper, which refuses files that would run and detaches the viewer.
+  function openAttachmentExternally(path) {
+    if (path === "" || openProcess.running) return
+    openProcess.command = [helperPath, "attachment-open", String(path)]
+    openProcess.running = true
+  }
+
   function openAttachment(attachment) {
     if (!attachment) return
     var unique = String(attachment.unique || "")
@@ -205,7 +213,7 @@ Item {
       viewerPath = cached
     }
     if (cached !== "") {
-      if (!isImage) Quickshell.execDetached(["xdg-open", cached])
+      if (!isImage) root.openAttachmentExternally(cached)
       return
     }
     if (attachmentProcess.running) {
@@ -396,7 +404,7 @@ Item {
         if (root.attachmentFetchMode === "view") {
           if (root.viewerOpen && root.viewerPath === "") root.viewerPath = path
         } else {
-          Quickshell.execDetached(["xdg-open", path])
+          root.openAttachmentExternally(path)
         }
       }
     }
@@ -406,6 +414,14 @@ Item {
         if (root.viewerOpen && root.viewerPath === "") root.viewerOpen = false
         root.error = "Could not fetch the attachment from the phone"
       }
+    }
+  }
+
+  Process {
+    id: openProcess
+    stderr: StdioCollector { waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) root.error = "OmaLink will not open this file"
     }
   }
 
@@ -1126,7 +1142,7 @@ Item {
               foreground: "white"
               fontFamily: root.fontFamily
               bordered: true
-              onClicked: Quickshell.execDetached(["xdg-open", root.viewerPath])
+              onClicked: root.openAttachmentExternally(root.viewerPath)
             }
 
             Button {

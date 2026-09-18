@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: omalink [--notify-apps \"App, Package\"] [--popups on|off] <status|watch|media|media-action|media-volume|media-seek|ring|clipboard|share|dismiss|dismiss-all|notify-reply|contacts|conversations|messages|attachment|attachment-save|reply|sms|seen|mark-seen> [arguments]" >&2
+  echo "Usage: omalink [--notify-apps \"App, Package\"] [--popups on|off] <status|watch|media|media-action|media-volume|media-seek|ring|clipboard|share|dismiss|dismiss-all|notify-reply|contacts|conversations|messages|attachment|attachment-open|attachment-save|reply|sms|seen|mark-seen> [arguments]" >&2
   exit 2
 }
 
@@ -115,6 +115,21 @@ phone_icon_path() {
   printf '%s' "$path"
 }
 
+# Every value below arrives as text over D-Bus, so an unexpected one would make
+# jq fail and take the whole status down with it. Numbers and booleans fall back
+# instead, which shows as a missing reading rather than an empty panel.
+numeric_or() {
+  local value="${1:-}" fallback="$2"
+  [[ $value =~ ^-?[0-9]+$ ]] || value="$fallback"
+  printf '%s' "$value"
+}
+
+boolean_or() {
+  local value="${1:-}" fallback="$2"
+  [[ $value == true || $value == false ]] || value="$fallback"
+  printf '%s' "$value"
+}
+
 status() {
   if ! command -v kdeconnect-cli >/dev/null 2>&1; then
     jq -cn '{ok: true, installed: false, devices: [], statusText: "KDE Connect is not installed"}'
@@ -129,7 +144,9 @@ status() {
     [[ -n $line ]] || continue
     id="${line%% *}"
     name="${line#* }"
-    [[ -n $id && $name != "$line" ]] || continue
+    # A device name that contains a line break would otherwise parse as a second
+    # device with an id no D-Bus path can use.
+    [[ -n $id && $name != "$line" && $id =~ ^[A-Za-z0-9]+$ ]] || continue
     device_path="/modules/kdeconnect/devices/$id"
     charge="$(dbus_property "$device_path/battery" org.kde.kdeconnect.device.battery charge i)"
     charging="$(dbus_property "$device_path/battery" org.kde.kdeconnect.device.battery isCharging b)"
@@ -140,9 +157,9 @@ status() {
     devices+=("$(jq -cn \
       --arg id "$id" \
       --arg name "$name" \
-      --argjson charge "${charge:-null}" \
-      --argjson charging "${charging:-false}" \
-      --argjson networkStrength "${network_strength:-null}" \
+      --argjson charge "$(numeric_or "${charge:-}" null)" \
+      --argjson charging "$(boolean_or "${charging:-}" false)" \
+      --argjson networkStrength "$(numeric_or "${network_strength:-}" null)" \
       --arg networkType "${network_type:-}" \
       --argjson notifications "${notifications:-[]}" \
       --argjson media "${media:-null}" \
@@ -174,18 +191,18 @@ notification_json() {
     title="$(dbus_json_property "$notification_path" title)"
     text="$(dbus_json_property "$notification_path" text)"
     icon_path="$(phone_icon_path "$(dbus_json_property "$notification_path" iconPath)")"
-    dismissable="$(dbus_json_property "$notification_path" dismissable)"
+    dismissable="$(boolean_or "$(dbus_json_property "$notification_path" dismissable)" false)"
     reply_id="$(dbus_json_property "$notification_path" replyId)"
-    is_conversation="$(dbus_json_property "$notification_path" isConversation)"
+    is_conversation="$(boolean_or "$(dbus_json_property "$notification_path" isConversation)" false)"
     notifications+=("$(jq -cn \
       --arg id "$notification_id" \
       --arg appName "$app_name" \
       --arg title "$title" \
       --arg text "$text" \
       --arg iconPath "$icon_path" \
-      --argjson dismissable "${dismissable:-false}" \
+      --argjson dismissable "$dismissable" \
       --arg replyId "$reply_id" \
-      --argjson isConversation "${is_conversation:-false}" \
+      --argjson isConversation "$is_conversation" \
       '{id: $id, appName: $appName, title: $title, text: $text, iconPath: $iconPath, dismissable: $dismissable, replyId: $replyId, replyable: ($replyId != ""), isConversation: $isConversation}')")
   done < <(jq -r '.data[0][]?' <<<"$raw" 2>/dev/null)
 
@@ -267,22 +284,22 @@ media_json() {
   title="$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote title s)"
   artist="$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote artist s)"
   album="$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote album s)"
-  volume="$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote volume i)"
-  length="$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote length i)"
-  position="$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote position i)"
-  is_playing="$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote isPlaying b)"
-  can_seek="$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote canSeek b)"
+  volume="$(numeric_or "$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote volume i)" 0)"
+  length="$(numeric_or "$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote length i)" 0)"
+  position="$(numeric_or "$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote position i)" 0)"
+  is_playing="$(boolean_or "$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote isPlaying b)" false)"
+  can_seek="$(boolean_or "$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote canSeek b)" false)"
   album_art="$(phone_album_art "$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote localAlbumArtUrl s)")"
   jq -cn \
     --arg player "$player" \
     --arg title "$title" \
     --arg artist "$artist" \
     --arg album "$album" \
-    --argjson volume "${volume:-0}" \
-    --argjson length "${length:-0}" \
-    --argjson position "${position:-0}" \
-    --argjson isPlaying "${is_playing:-false}" \
-    --argjson canSeek "${can_seek:-false}" \
+    --argjson volume "$volume" \
+    --argjson length "$length" \
+    --argjson position "$position" \
+    --argjson isPlaying "$is_playing" \
+    --argjson canSeek "$can_seek" \
     --arg albumArt "${album_art:-}" \
     --argjson players "$player_list" \
     '{player: $player, title: $title, artist: $artist, album: $album,
@@ -359,7 +376,7 @@ media_seek() {
     echo "No media is playing on the phone" >&2
     exit 1
   }
-  position="$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote position i)"
+  position="$(numeric_or "$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote position i)" "")"
   [[ -n $position ]] || {
     echo "No media is playing on the phone" >&2
     exit 1
@@ -419,6 +436,11 @@ handle_posted() {
   text="$(dbus_json_property "$notification_path" text)"
   is_conversation="$(dbus_json_property "$notification_path" isConversation)"
   icon_path="$(phone_icon_path "$(dbus_json_property "$notification_path" iconPath)")"
+  # A notification dismissed between the signal and this read has no fields
+  # left, and a popup with an empty title is worse than none.
+  if [[ -z $title && -z $text && -z $app_name ]]; then
+    return 0
+  fi
   if [[ $is_conversation == true ]]; then
     summary="New message"
     body="Open OmaLink to read it"
@@ -462,13 +484,21 @@ watch() {
   # One watcher only, even with a Service instance per bar: the first holds
   # the lock, the rest block here as standbys and take over if it dies. Child
   # processes must not inherit the lock fd (9>&-) or a stray would keep it.
-  exec 9>"${XDG_RUNTIME_DIR:-/tmp}/omalink-watch.lock"
+  local runtime="${XDG_RUNTIME_DIR:-/tmp}"
+  local pid_file="$runtime/omalink-watch.pid" stale
+  exec 9>"$runtime/omalink-watch.lock"
   flock 9
-  # Holding the lock means no other watcher is alive, so any dbus-monitor
-  # still using our match rule is an orphan from a killed watcher (the shell
-  # kills the watcher on reload but cannot reach this grandchild). Reap them
-  # before spawning ours or they accumulate across shell restarts.
-  pkill -f "dbus-monitor --session type='signal',interface='org.kde.kdeconnect.device.notifications'" 2>/dev/null || true
+  # Holding the lock means no other watcher is alive, so a pid left in the file
+  # belongs to a dbus-monitor orphaned by a killed watcher (the shell kills the
+  # watcher on reload but cannot reach this grandchild). Reap that one pid, and
+  # only when it is still a dbus-monitor, so an unrelated process cannot be hit.
+  if [[ -s $pid_file ]]; then
+    stale="$(<"$pid_file")"
+    if [[ $stale =~ ^[0-9]+$ ]] && grep -qa 'dbus-monitor' "/proc/$stale/cmdline" 2>/dev/null; then
+      kill "$stale" 2>/dev/null || true
+    fi
+    rm -f "$pid_file"
+  fi
   ensure_quiet_daemon_popups || true
   local line device_id="" notification_id
   while IFS= read -r line; do
@@ -487,7 +517,10 @@ watch() {
         ;;
     esac
   done < <(dbus-monitor --session \
-    "type='signal',interface='org.kde.kdeconnect.device.notifications',member='notificationPosted'" 2>/dev/null 9>&-)
+    "type='signal',interface='org.kde.kdeconnect.device.notifications',member='notificationPosted'" \
+    2>/dev/null 9>&- &
+    printf '%s\n' "$!" >"$pid_file"
+    wait)
   wait
 }
 
@@ -736,6 +769,47 @@ attachment_save() {
   printf '%s\n' "$target"
 }
 
+# KDE Connect keeps the phone's file name, so opening an attachment means
+# handing a phone-chosen file to the desktop default application. That is what
+# the user asked for by clicking it, but a program is not: files that would run
+# are refused, and anything else goes to the user's own handler.
+attachment_content_kind() {
+  local path="$1" magic name
+  name="${path##*/}"
+  case ${name,,} in
+    *.desktop | *.lnk | *.scr | *.appimage | *.exe | *.msi | *.bat | *.cmd | *.ps1 | *.sh | *.bash | *.zsh | *.py | *.pl | *.rb | *.jar | *.deb | *.rpm)
+      printf 'program'
+      return 0
+      ;;
+  esac
+  magic="$(head -c 16 -- "$path" 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+  case $magic in
+    7f454c46* | 4d5a* | fecdfaed* | fecdfaef* | cefaedfe* | cafebabe*) printf 'program' ;;  # ELF, PE, Mach-O, Java
+    2321*) printf 'script' ;;                                                               # #!
+    5b4465736b746f7020456e7472795d*) printf 'desktop entry' ;;                             # [Desktop Entry]
+    *) printf 'other' ;;
+  esac
+}
+
+open_attachment() {
+  local path="${1:-}" kind
+  path="$(phone_local_path "$path" "$attachment_max_bytes")"
+  [[ -n $path ]] || usage
+  kind="$(attachment_content_kind "$path")"
+  if [[ $kind != other ]]; then
+    echo "OmaLink will not open a $kind the phone sent" >&2
+    exit 1
+  fi
+  command -v xdg-open >/dev/null 2>&1 || {
+    echo "xdg-open is required" >&2
+    exit 1
+  }
+  # Detached: the default application outlives this helper, and the panel must
+  # not wait for it to close.
+  setsid xdg-open "$path" >/dev/null 2>&1 </dev/null &
+  disown 2>/dev/null || true
+}
+
 reply() {
   local device_id="${1:-}" thread_id="${2:-}" message="${3:-}"
   [[ $device_id =~ ^[A-Za-z0-9]+$ && $thread_id =~ ^[0-9]+$ && -n $message ]] || usage
@@ -820,6 +894,7 @@ case "${1:-}" in
   conversations) shift; conversations "${1:-}" ;;
   messages) shift; messages "${1:-}" "${2:-}" ;;
   attachment) shift; attachment "${1:-}" "${2:-}" "${3:-}" ;;
+  attachment-open) shift; open_attachment "${1:-}" ;;
   attachment-save) shift; attachment_save "${1:-}" ;;
   reply) shift; reply "${1:-}" "${2:-}" "${3:-}" ;;
   sms) shift; send_sms "${1:-}" "${2:-}" "${3:-}" ;;

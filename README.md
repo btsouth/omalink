@@ -120,7 +120,10 @@ URL, or an attachment.
   desktop popups, so notification contents cannot inject markup or make the
   popup daemon fetch something remote.
 - Attachments can be opened or saved only from KDE Connect's download
-  directory.
+  directory. Opening one goes through OmaLink's own helper, which refuses files
+  the phone sent that would run (programs, scripts, and desktop entries, judged
+  by content as well as name) and hands everything else to your default
+  application.
 - OmaLink never builds a shell command out of phone data. Values passed to
   `kdeconnect-cli`, `busctl`, and the plugin's own helper are passed as single
   arguments and validated first.

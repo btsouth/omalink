@@ -9,7 +9,11 @@ trap 'rm -rf "$temp_dir"' EXIT
 cat >"$temp_dir/kdeconnect-cli" <<'EOF'
 #!/usr/bin/env bash
 if [[ ${1:-} == --list-available ]]; then
-  printf '%s\n' 'abc123 Pixel 9' 'def456 Galaxy S25'
+  if [[ -n ${OMALINK_TEST_EXTRA_DEVICE:-} ]]; then
+    printf '%s\n' 'abc123 Pixel 9' 'def456 Galaxy S25' '../bad Injected'
+  else
+    printf '%s\n' 'abc123 Pixel 9' 'def456 Galaxy S25'
+  fi
   exit 0
 fi
 if [[ ${1:-} == --device && ${3:-} == --ring ]]; then
@@ -50,8 +54,8 @@ if [[ " $* " == *" sendAction "* ]]; then echo "sendAction $*" >>"$0.log"; exit 
 if [[ " $* " == *" Set ssv "* ]]; then echo "setVolume $*" >>"$0.log"; exit 0; fi
 if [[ " $* " == *"mprisremote seek "* ]]; then echo "seek $*" >>"$0.log"; exit 0; fi
 case "${*: -1}" in
-  charge) printf '%s\n' 'i 71' ;;
-  isCharging) printf '%s\n' 'b false' ;;
+  charge) if [[ -n ${OMALINK_TEST_JUNK:-} ]]; then printf '%s\n' 'i lots'; else printf '%s\n' 'i 71'; fi ;;
+  isCharging) if [[ -n ${OMALINK_TEST_JUNK:-} ]]; then printf '%s\n' 'b maybe'; else printf '%s\n' 'b false'; fi ;;
   cellularNetworkStrength) printf '%s\n' 'i 3' ;;
   cellularNetworkType) printf '%s\n' 's "5G"' ;;
   dismiss) echo "dismiss $*" >>"$0.log"; exit 0 ;;
@@ -125,10 +129,10 @@ case "${*: -1}" in
   album) printf '%s\n' 's "Ultraviolet"' ;;
   player) printf '%s\n' 's "Apple Music"' ;;
   localAlbumArtUrl) printf '%s\n' "s \"$OMALINK_TEST_ALBUM_ART\"" ;;
-  volume) printf '%s\n' 'i 40' ;;
+  volume) if [[ -n ${OMALINK_TEST_JUNK:-} ]]; then printf '%s\n' 'i lots'; else printf '%s\n' 'i 40'; fi ;;
   length) printf '%s\n' 'i 144023' ;;
   position) printf '%s\n' 'i 94844' ;;
-  isPlaying) printf '%s\n' 'b true' ;;
+  isPlaying) if [[ -n ${OMALINK_TEST_JUNK:-} ]]; then printf '%s\n' 'b perhaps'; else printf '%s\n' 'b true'; fi ;;
   canSeek) printf '%s\n' 'b true' ;;
   iconPath)
     if [[ " $* " == *"/notif.1 "* ]]; then
@@ -167,6 +171,12 @@ cat >"$temp_dir/qs" <<'EOF'
 echo "qs $*" >>"$0.log"
 EOF
 chmod +x "$temp_dir/qs"
+
+cat >"$temp_dir/xdg-open" <<'EOF'
+#!/usr/bin/env bash
+echo "open $*" >>"$0.log"
+EOF
+chmod +x "$temp_dir/xdg-open"
 
 cat >"$temp_dir/hyprctl" <<'EOF'
 #!/usr/bin/env bash
@@ -208,6 +218,12 @@ export OMALINK_TEST_ICON_PATH="$icon_dir/abc123"
 export OMALINK_TEST_ATTACHMENT="$attachment_fixture"
 
 status="$(PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" status)"
+junk_status="$(OMALINK_TEST_JUNK=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" status)"
+jq -e '.devices[0].battery.charge == null and .devices[0].battery.charging == false
+  and .devices[0].media.volume == 0 and .devices[0].media.isPlaying == false
+  and (.devices[0].notifications | length) == 3' <<<"$junk_status" >/dev/null
+injected_status="$(OMALINK_TEST_EXTRA_DEVICE=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" status)"
+jq -e '(.devices | length) == 2 and ([.devices[].id] | index("../bad")) == null' <<<"$injected_status" >/dev/null
 jq -e '.installed == true and (.devices | length) == 2 and .devices[0].name == "Pixel 9" and .devices[0].battery.charge == 71 and .devices[0].connectivity.type == "5G" and (.devices[0].notifications | length) == 3' <<<"$status" >/dev/null
 voicemail_status="$(PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --notify-apps "voicemail" status)"
 jq -e '(.devices[0].notifications | length) == 1 and .devices[0].notifications[0].appName == "Visual Voicemail"' <<<"$voicemail_status" >/dev/null
@@ -291,6 +307,27 @@ if HOME="$saved_home" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attac
   echo "saving a file outside the KDE Connect directories was accepted" >&2
   exit 1
 fi
+
+# Opening an attachment hands the phone's file to the desktop. Anything that
+# would run is refused, whatever it is named.
+printf '\xff\xd8\xff\xe0jpegbytes' >"$cache_root/photo.jpg"
+{ printf '\x7fELF'; head -c 32 /dev/zero; } >"$cache_root/disguised.jpg"
+printf '[Desktop Entry]\nExec=/bin/sh\n' >"$cache_root/evil.desktop"
+printf '#!/bin/sh\necho hi\n' >"$cache_root/evil.sh"
+: >"$temp_dir/xdg-open.log"
+PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment-open "$cache_root/photo.jpg"
+sleep 0.3
+grep -q "open $cache_root/photo.jpg" "$temp_dir/xdg-open.log"
+for refused in "$cache_root/disguised.jpg" "$cache_root/evil.desktop" "$cache_root/evil.sh" "$temp_dir/outside.png"; do
+  if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment-open "$refused" >/dev/null 2>&1; then
+    echo "opening $refused was accepted" >&2
+    exit 1
+  fi
+done
+if grep -q 'evil\.\|disguised' "$temp_dir/xdg-open.log"; then
+  echo "a file that would run was handed to the desktop" >&2
+  exit 1
+fi
 if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" dismiss '../bad' notification-1 >/dev/null 2>&1; then
   echo "invalid device id was accepted" >&2
   exit 1
@@ -346,7 +383,17 @@ if XDG_STATE_HOME="$temp_dir/state" PATH="$temp_dir:/usr/bin" "$project_dir/bin/
   exit 1
 fi
 
+# The watcher reaps only its own orphaned dbus-monitor, never an unrelated pid.
+sleep 60 &
+bystander=$!
+printf '%s\n' "$bystander" >"$temp_dir/omalink-watch.pid"
 watch_out="$(XDG_RUNTIME_DIR="$temp_dir" XDG_CONFIG_HOME="$temp_dir/xdg" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" watch)"
+if ! kill -0 "$bystander" 2>/dev/null; then
+  echo "the watcher killed an unrelated process" >&2
+  exit 1
+fi
+kill "$bystander" 2>/dev/null || true
+[[ -s "$temp_dir/omalink-watch.pid" ]]
 [[ $watch_out == $'posted abc123 notif.9\nposted abc123 notif.10\nposted abc123 notif.11' ]]
 grep -q '^\[Event/notification\]$' "$temp_dir/xdg/kdeconnect.notifyrc"
 grep -q '^Action=$' "$temp_dir/xdg/kdeconnect.notifyrc"
