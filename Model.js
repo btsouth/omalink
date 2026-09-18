@@ -265,6 +265,10 @@ function thumbnailUri(attachment) {
   var thumbnail = String((attachment && attachment.thumbnail) || "").replace(/\s+/g, "")
   if (thumbnail === "" || thumbnail.length > 1048576) return ""
   if (!/^[A-Za-z0-9+/=]+$/.test(thumbnail)) return ""
+  // The decoded bytes decide the decoder, so the base64 prefix has to be a
+  // raster image: SVG or other markup would otherwise reach the image loader
+  // through this one field, which no path check covers.
+  if (!/^(iVBORw0KGgo|\/9j\/|R0lGOD|UklGR|Qk)/.test(thumbnail)) return ""
   return "data:image/png;base64," + thumbnail
 }
 
@@ -285,16 +289,19 @@ function mediaState(device) {
 // already drops remote URLs and files outside KDE Connect's directories; this
 // keeps the panel from loading any other scheme even if that changed, so a
 // phone cannot make the shell fetch a URL or decode a file it chose.
+//
+// This is also the only place that builds the URI, and it encodes the
+// characters Qt would decode again. Without that, a file name containing %2F
+// would resolve to a different path than the one the helper checked.
 function localImageSource(value) {
   var text = String(value === undefined || value === null ? "" : value).trim()
   if (text === "") return ""
-  if (text.indexOf("file://") === 0) {
-    text = text.slice(7)
-  } else if (text.charAt(0) !== "/") {
-    return ""
-  }
+  if (text.indexOf("file://") === 0) text = text.slice(7)
   if (text.charAt(0) !== "/" || text.indexOf("\n") !== -1 || text.indexOf("\0") !== -1) return ""
-  return "file://" + text.replace(/ /g, "%20")
+  var encoded = text.replace(/[%?#\s]/g, function(character) {
+    return character === " " || character === "\t" ? "%20" : "%" + character.charCodeAt(0).toString(16).toUpperCase()
+  })
+  return "file://" + encoded
 }
 
 function previewText(conversation) {

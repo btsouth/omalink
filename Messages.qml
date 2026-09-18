@@ -928,7 +928,6 @@ Item {
               enabled: !root.sending
               placeholderText: "Contact name or phone number"
               text: root.recipientQuery
-              textFormat: Text.PlainText
               foreground: root.foreground
               font.family: root.fontFamily
               onTextEdited: {

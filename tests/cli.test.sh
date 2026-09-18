@@ -139,7 +139,7 @@ case "${*: -1}" in
     ;;
   text)
     if [[ " $* " == *"/notif.9 "* ]]; then
-      printf '%s\n' '{"type":"s","data":"<b>Bold</b> phone text"}'
+      printf '%s\n' '{"type":"s","data":"<b>Bold</b> & Co"}'
     else
       printf '%s\n' '{"type":"s","data":"Phone text"}'
     fi
@@ -228,6 +228,7 @@ printf '\x89PNG\r\n\x1a\npngbytes' >"$icon_dir/abc123"
 { printf '\x89PNG\r\n\x1a\n'; head -c 2097152 /dev/zero; } >"$icon_dir/bigicon"
 printf '<svg xmlns="http://www.w3.org/2000/svg"><image href="http://192.168.1.1/x.png"/></svg>' >"$art_dir/evil.svg"
 { printf '\x89PNG\r\n\x1a\n'; head -c 5242880 /dev/zero; } >"$art_dir/big.png"
+{ printf '\x89PNG\r\n\x1a\n'; head -c 5242872 /dev/zero; } >"$art_dir/at-limit.png"
 ln -s /etc/hostname "$art_dir/link.jpg"
 printf '\x89PNG\r\n\x1a\npngbytes' >"$temp_dir/outside.png"
 ln -s /etc "$art_dir/escape"
@@ -254,7 +255,7 @@ voicemail_status="$(PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --notif
 jq -e '(.devices[0].notifications | length) == 1 and .devices[0].notifications[0].appName == "Visual Voicemail"' <<<"$voicemail_status" >/dev/null
 all_status="$(PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --notify-apps "" status)"
 jq -e '(.devices[0].notifications | length) == 4' <<<"$all_status" >/dev/null
-jq -e --arg art "file://$art_dir/art.jpg" '.devices[0].media == {player: "Apple Music", title: "Overthinking", artist: "usedcvnt", album: "Ultraviolet", volume: 40, length: 144023, position: 94844, isPlaying: true, canSeek: true, albumArt: $art, players: ["Apple Music"]}' <<<"$status" >/dev/null
+jq -e --arg art "$art_dir/art.jpg" '.devices[0].media == {player: "Apple Music", title: "Overthinking", artist: "usedcvnt", album: "Ultraviolet", volume: 40, length: 144023, position: 94844, isPlaying: true, canSeek: true, albumArt: $art, players: ["Apple Music"]}' <<<"$status" >/dev/null
 jq -e '.devices[1].media == null' <<<"$status" >/dev/null
 jq -e --arg icon "$icon_dir/abc123" '.devices[0].notifications[0].iconPath == $icon and .devices[0].notifications[1].iconPath == ""' <<<"$status" >/dev/null
 jq -e '.devices[0].notifications[0] | .title == "Phone title" and .text == "Phone text" and .isConversation == true and .dismissable == false' <<<"$status" >/dev/null
@@ -287,7 +288,8 @@ for rejected in \
     exit 1
   fi
 done
-[[ "$(album_art_case "file://$art_dir/art%20with%20space.jpg")" == "file://$art_dir/art%20with%20space.jpg" ]]
+[[ "$(album_art_case "file://$art_dir/art%20with%20space.jpg")" == "$art_dir/art with space.jpg" ]]
+[[ "$(album_art_case "file://$art_dir/at-limit.png")" == "$art_dir/at-limit.png" ]]
 [[ "$(album_art_case "")" == "" ]]
 if [[ -n "$(OMALINK_TEST_ICON_PATH="$icon_dir/bigicon" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" status | jq -r '.devices[0].notifications[0].iconPath')" ]]; then
   echo "an oversized notification icon was accepted" >&2
@@ -300,6 +302,11 @@ jq -e '.title == "Overthinking" and .artist == "usedcvnt" and .players == ["Appl
 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" media-action abc123 PlayPause >/dev/null
 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" media-volume abc123 65 >/dev/null
 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" media-seek abc123 100000 >/dev/null
+grep -q 'call -- org.kde.kdeconnect' "$temp_dir/busctl.log"
+if grep -q -- '--address' "$temp_dir/busctl.log"; then
+  echo "a phone-supplied value reached busctl as an option" >&2
+  exit 1
+fi
 grep -q 'sendAction .*PlayPause' "$temp_dir/busctl.log"
 grep -q 'setVolume .*volume i 65' "$temp_dir/busctl.log"
 grep -q 'seek .*i 5156' "$temp_dir/busctl.log"
@@ -392,6 +399,12 @@ if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment abc123 notanu
   echo "invalid attachment part id was accepted" >&2
   exit 1
 fi
+for option_like in '--address=tcp:host=127.0.0.1,port=1' '--host=attacker@evil.example' '-1'; do
+  if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment abc123 42 "$option_like" >/dev/null 2>&1; then
+    echo "an attachment name that looks like an option was accepted: $option_like" >&2
+    exit 1
+  fi
+done
 if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" media '../bad' >/dev/null 2>&1; then
   echo "invalid media device id was accepted" >&2
   exit 1
@@ -447,6 +460,11 @@ grep -q '^\[Event/notification\]$' "$temp_dir/xdg/kdeconnect.notifyrc"
 grep -q '^Action=$' "$temp_dir/xdg/kdeconnect.notifyrc"
 grep -q 'default=Open' "$temp_dir/notify-send.log"
 grep -q '&lt;img src="http://192.168.1.1/x.png"&gt;' "$temp_dir/notify-send.log"
+grep -q '&lt;b&gt;Bold&lt;/b&gt; &amp; Co' "$temp_dir/notify-send.log"
+if grep -q 'Tom & Jerry\|& Co' "$temp_dir/notify-send.log"; then
+  echo "an ampersand reached the popup unescaped" >&2
+  exit 1
+fi
 if grep -q '<img src=' "$temp_dir/notify-send.log"; then
   echo "phone notification text reached the popup unescaped" >&2
   exit 1
