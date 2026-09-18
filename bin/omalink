@@ -8,13 +8,17 @@ usage() {
 }
 
 # --- Phone-supplied data ----------------------------------------------------
+# Every busctl call below passes -- before its positional arguments. busctl keeps
+# parsing options after them, so without it a phone-supplied value such as
+# "--address=tcp:host=..." would be read as an option and make the helper open a
+# connection to a host the phone chose.
 # Everything KDE Connect reports comes from the paired phone, so none of it is
 # trusted here: a phone app picks the album art URL, the notification icon path
 # and the attachment contents. A path handed to the shell's image loader has to
 # be a local file KDE Connect itself wrote, or that loader would fetch remote
 # URLs and decode unbounded images inside the shell process. Every check fails
 # closed: art that does not qualify just leaves the placeholder icon.
-album_art_max_bytes=$((4 * 1024 * 1024))
+album_art_max_bytes=$((5 * 1024 * 1024))
 icon_max_bytes=$((1 * 1024 * 1024))
 attachment_max_bytes=$((64 * 1024 * 1024))
 # How much of a phone's notification list is read per refresh. Each notification
@@ -106,19 +110,13 @@ raster_image() {
   return 1
 }
 
-# file:// URI for album art the panel may load, or empty.
-phone_album_art() {
+# Canonical path of an image KDE Connect wrote for the phone (album art,
+# notification icon), or empty. The path is handed to the panel as it is: the
+# QML side builds the file:// URI and does the percent encoding, so a % in a name
+# cannot survive into the URI and decode to a different file.
+phone_image_path() {
   local path
-  path="$(phone_local_path "${1:-}" "$album_art_max_bytes")"
-  [[ -n $path ]] || return 0
-  raster_image "$path" || return 0
-  printf 'file://%s' "${path// /%20}"
-}
-
-# Local icon path for a phone notification, or empty.
-phone_icon_path() {
-  local path
-  path="$(phone_local_path "${1:-}" "$icon_max_bytes")"
+  path="$(phone_local_path "${1:-}" "${2:-0}")"
   [[ -n $path ]] || return 0
   raster_image "$path" || return 0
   printf '%s' "$path"
@@ -190,7 +188,7 @@ notification_json() {
   local -a notifications=()
   local read_count=0 kept_count=0
 
-  raw="$(busctl --user --json=short call org.kde.kdeconnect "$notification_root" \
+  raw="$(busctl --user --json=short call -- org.kde.kdeconnect "$notification_root" \
     org.kde.kdeconnect.device.notifications activeNotifications 2>/dev/null || true)"
   while IFS= read -r notification_id; do
     [[ $read_count -lt $notifications_read_max && $kept_count -lt $notifications_max ]] || break
@@ -203,7 +201,7 @@ notification_json() {
     kept_count=$((kept_count + 1))
     title="$(dbus_json_property "$notification_path" title)"
     text="$(dbus_json_property "$notification_path" text)"
-    icon_path="$(phone_icon_path "$(dbus_json_property "$notification_path" iconPath)")"
+    icon_path="$(phone_image_path "$(dbus_json_property "$notification_path" iconPath)" "$icon_max_bytes")"
     dismissable="$(boolean_or "$(dbus_json_property "$notification_path" dismissable)" false)"
     reply_id="$(dbus_json_property "$notification_path" replyId)"
     is_conversation="$(boolean_or "$(dbus_json_property "$notification_path" isConversation)" false)"
@@ -263,14 +261,14 @@ notification_allowed() {
 
 dbus_json_property() {
   local path="$1" property="$2"
-  busctl --user --json=short get-property org.kde.kdeconnect "$path" \
+  busctl --user --json=short get-property -- org.kde.kdeconnect "$path" \
     org.kde.kdeconnect.device.notifications.notification "$property" 2>/dev/null \
     | jq -r '.data // empty' 2>/dev/null || true
 }
 
 dbus_property() {
   local path="$1" interface="$2" property="$3" signature="$4" raw
-  raw="$(busctl --user get-property org.kde.kdeconnect "$path" "$interface" "$property" 2>/dev/null || true)"
+  raw="$(busctl --user get-property -- org.kde.kdeconnect "$path" "$interface" "$property" 2>/dev/null || true)"
   [[ $raw == "$signature "* ]] || return 0
   raw="${raw#* }"
   if [[ $signature == s ]]; then
@@ -286,7 +284,7 @@ dbus_property() {
 media_json() {
   local device_path="$1" mpris_path="$1/mprisremote" raw player_list
   local player title artist album volume length position is_playing can_seek album_art
-  raw="$(busctl --user --json=short get-property org.kde.kdeconnect "$mpris_path" \
+  raw="$(busctl --user --json=short get-property -- org.kde.kdeconnect "$mpris_path" \
     org.kde.kdeconnect.device.mprisremote playerList 2>/dev/null || true)"
   player_list="$(jq -c '.data // []' <<<"$raw" 2>/dev/null || true)"
   if [[ -z $player_list || $player_list == "[]" ]]; then
@@ -302,7 +300,7 @@ media_json() {
   position="$(numeric_or "$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote position i)" 0)"
   is_playing="$(boolean_or "$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote isPlaying b)" false)"
   can_seek="$(boolean_or "$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote canSeek b)" false)"
-  album_art="$(phone_album_art "$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote localAlbumArtUrl s)")"
+  album_art="$(phone_image_path "$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote localAlbumArtUrl s)" "$album_art_max_bytes")"
   jq -cn \
     --arg player "$player" \
     --arg title "$title" \
@@ -367,14 +365,14 @@ media() {
 media_action() {
   local device_id="${1:-}" action="${2:-}"
   [[ $device_id =~ ^[A-Za-z0-9]+$ && $action =~ ^(PlayPause|Play|Pause|Next|Previous|Stop|Rewind|FastForward)$ ]] || usage
-  busctl --user call org.kde.kdeconnect "/modules/kdeconnect/devices/$device_id/mprisremote" \
+  busctl --user call -- org.kde.kdeconnect "/modules/kdeconnect/devices/$device_id/mprisremote" \
     org.kde.kdeconnect.device.mprisremote sendAction s "$action" >/dev/null
 }
 
 media_volume() {
   local device_id="${1:-}" volume="${2:-}"
   [[ $device_id =~ ^[A-Za-z0-9]+$ && $volume =~ ^[0-9]+$ && $volume -ge 0 && $volume -le 100 ]] || usage
-  busctl --user call org.kde.kdeconnect "/modules/kdeconnect/devices/$device_id/mprisremote" \
+  busctl --user call -- org.kde.kdeconnect "/modules/kdeconnect/devices/$device_id/mprisremote" \
     org.freedesktop.DBus.Properties Set ssv \
     org.kde.kdeconnect.device.mprisremote volume i "$volume" >/dev/null
 }
@@ -395,14 +393,14 @@ media_seek() {
     exit 1
   }
   offset=$((target - position))
-  busctl --user call org.kde.kdeconnect "$mpris_path" \
+  busctl --user call -- org.kde.kdeconnect "$mpris_path" \
     org.kde.kdeconnect.device.mprisremote seek i "$offset" >/dev/null
 }
 
 dismiss_notification() {
   local device_id="${1:-}" notification_id="${2:-}"
-  [[ $device_id =~ ^[A-Za-z0-9]+$ && $notification_id =~ ^[A-Za-z0-9._:-]+$ ]] || usage
-  busctl --user call org.kde.kdeconnect \
+  [[ $device_id =~ ^[A-Za-z0-9]+$ && $notification_id =~ ^[A-Za-z0-9._:-]+$ && $notification_id != -* && $notification_id != . && $notification_id != .. ]] || usage
+  busctl --user call -- org.kde.kdeconnect \
     "/modules/kdeconnect/devices/$device_id/notifications/$notification_id" \
     org.kde.kdeconnect.device.notifications.notification dismiss >/dev/null
 }
@@ -448,7 +446,7 @@ handle_posted() {
   title="$(dbus_json_property "$notification_path" title)"
   text="$(dbus_json_property "$notification_path" text)"
   is_conversation="$(dbus_json_property "$notification_path" isConversation)"
-  icon_path="$(phone_icon_path "$(dbus_json_property "$notification_path" iconPath)")"
+  icon_path="$(phone_image_path "$(dbus_json_property "$notification_path" iconPath)" "$icon_max_bytes")"
   # A notification dismissed between the signal and this read has no fields
   # left, and a popup with an empty title is worse than none.
   if [[ -z $title && -z $text && -z $app_name ]]; then
@@ -544,8 +542,8 @@ watch() {
 
 notify_reply() {
   local device_id="${1:-}" reply_id="${2:-}" message="${3:-}"
-  [[ $device_id =~ ^[A-Za-z0-9]+$ && $reply_id =~ ^[A-Za-z0-9._:-]+$ && -n $message ]] || usage
-  busctl --user call org.kde.kdeconnect \
+  [[ $device_id =~ ^[A-Za-z0-9]+$ && $reply_id =~ ^[A-Za-z0-9._:-]+$ && $reply_id != -* && -n $message ]] || usage
+  busctl --user call -- org.kde.kdeconnect \
     "/modules/kdeconnect/devices/$device_id/notifications" \
     org.kde.kdeconnect.device.notifications sendReply ss "$reply_id" "$message" >/dev/null
 }
@@ -554,7 +552,7 @@ dismiss_all_notifications() {
   local device_id="${1:-}" notification_root raw notification_id notification_path app_name internal_id
   [[ $device_id =~ ^[A-Za-z0-9]+$ ]] || usage
   notification_root="/modules/kdeconnect/devices/$device_id/notifications"
-  raw="$(busctl --user --json=short call org.kde.kdeconnect "$notification_root" \
+  raw="$(busctl --user --json=short call -- org.kde.kdeconnect "$notification_root" \
     org.kde.kdeconnect.device.notifications activeNotifications 2>/dev/null || true)"
   while IFS= read -r notification_id; do
     [[ $notification_id =~ ^[A-Za-z0-9._:-]+$ ]] || continue
@@ -562,7 +560,7 @@ dismiss_all_notifications() {
     app_name="$(dbus_json_property "$notification_path" appName)"
     internal_id="$(dbus_json_property "$notification_path" internalId)"
     notification_allowed "$app_name" "$internal_id" || continue
-    busctl --user call org.kde.kdeconnect "$notification_path" \
+    busctl --user call -- org.kde.kdeconnect "$notification_path" \
       org.kde.kdeconnect.device.notifications.notification dismiss >/dev/null 2>&1 || true
   done < <(jq -r '.data[0][]?' <<<"$raw" 2>/dev/null)
 }
@@ -572,7 +570,7 @@ contact_records_json() {
   device_path="/modules/kdeconnect/devices/$device_id"
   contact_dir="${XDG_DATA_HOME:-$HOME/.local/share}/kpeoplevcard/kdeconnect-$device_id"
 
-  busctl --user call org.kde.kdeconnect "$device_path/contacts" \
+  busctl --user call -- org.kde.kdeconnect "$device_path/contacts" \
     org.kde.kdeconnect.device.contacts synchronizeRemoteWithLocal >/dev/null 2>&1 || true
 
   if ! compgen -G "$contact_dir/*.vcf" >/dev/null; then
@@ -605,7 +603,7 @@ contacts() {
 }
 
 active_conversations_raw() {
-  busctl --user --json=short call org.kde.kdeconnect "$1" \
+  busctl --user --json=short call -- org.kde.kdeconnect "$1" \
     org.kde.kdeconnect.device.conversations activeConversations
 }
 
@@ -624,7 +622,7 @@ conversations() {
   raw="$(active_conversations_raw "$device_path" 2>/dev/null || true)"
   for attempt in $(seq 1 20); do
     if [[ -n $raw && $requested == 0 ]]; then
-      busctl --user call org.kde.kdeconnect "$device_path" \
+      busctl --user call -- org.kde.kdeconnect "$device_path" \
         org.kde.kdeconnect.device.conversations requestAllConversationThreads \
         >/dev/null 2>&1 || true
       requested=1
@@ -685,10 +683,10 @@ messages() {
   }
   trap cleanup_messages RETURN
 
-  stdbuf -oL busctl --user --verbose --json=short monitor org.kde.kdeconnect >"$capture_file" &
+  stdbuf -oL busctl --user --verbose --json=short monitor -- org.kde.kdeconnect >"$capture_file" &
   monitor_pid=$!
   sleep 0.1
-  timeout 12s busctl --user call org.kde.kdeconnect "$device_path" \
+  timeout 12s busctl --user call -- org.kde.kdeconnect "$device_path" \
     org.kde.kdeconnect.device.conversations requestConversation xii "$thread_id" 0 30 >/dev/null \
     || true
 
@@ -719,7 +717,7 @@ messages() {
 
 attachment() {
   local device_id="${1:-}" part_id="${2:-}" unique="${3:-}" device_path capture_dir capture_file monitor_pid path arrived attempt
-  [[ $device_id =~ ^[A-Za-z0-9]+$ && $part_id =~ ^-?[0-9]+$ && $unique =~ ^[[:print:]]+$ ]] || usage
+  [[ $device_id =~ ^[A-Za-z0-9]+$ && $part_id =~ ^-?[0-9]+$ && $unique =~ ^[[:print:]]+$ && $unique != -* ]] || usage
   device_path="/modules/kdeconnect/devices/$device_id"
   capture_dir="$(mktemp -d)"
   capture_file="$capture_dir/signals"
@@ -731,10 +729,10 @@ attachment() {
   }
   trap cleanup_attachment RETURN
 
-  stdbuf -oL busctl --user --json=short monitor org.kde.kdeconnect >"$capture_file" &
+  stdbuf -oL busctl --user --json=short monitor -- org.kde.kdeconnect >"$capture_file" &
   monitor_pid=$!
   sleep 0.1
-  busctl --user call org.kde.kdeconnect "$device_path" \
+  busctl --user call -- org.kde.kdeconnect "$device_path" \
     org.kde.kdeconnect.device.conversations requestAttachmentFile xs "$part_id" "$unique" >/dev/null
 
   path=""
@@ -856,7 +854,7 @@ open_attachment() {
 reply() {
   local device_id="${1:-}" thread_id="${2:-}" message="${3:-}"
   [[ $device_id =~ ^[A-Za-z0-9]+$ && $thread_id =~ ^[0-9]+$ && -n $message ]] || usage
-  busctl --user call org.kde.kdeconnect \
+  busctl --user call -- org.kde.kdeconnect \
     "/modules/kdeconnect/devices/$device_id" \
     org.kde.kdeconnect.device.conversations replyToConversation \
     xsav "$thread_id" "$message" 0 >/dev/null
