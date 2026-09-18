@@ -46,6 +46,12 @@ if [[ " $* " == *" replyToConversation "* || " $* " == *" sendReply "* || " $* "
   exit 0
 fi
 if [[ " $* " == *" monitor "* ]]; then
+  if [[ -n ${OMALINK_TEST_MANY_MESSAGES:-} ]]; then
+    for index in $(seq 1 300); do
+      printf '{"type":"signal","interface":"org.kde.kdeconnect.device.conversations","member":"conversationUpdated","payload":{"data":[{"data":[1,"body %s",[["+155****0001"]],%s,1,0,7,10,-1,[]]}]}}\n' \
+        "$index" "$index"
+    done
+  fi
   printf '{"type":"signal","interface":"org.kde.kdeconnect.device.conversations","member":"attachmentReceived","payload":{"data":["%s","PART_1.jpeg"]}}\n' "$OMALINK_TEST_ATTACHMENT"
   sleep 3
   exit 0
@@ -93,10 +99,23 @@ case "${*: -1}" in
     fi
     ;;
   activeNotifications)
-    printf '%s\n' '{"type":"as","data":[["notif.1","notif.2","notif.3","notif.4"]]}'
+    if [[ -n ${OMALINK_TEST_MANY_NOTIFICATIONS:-} ]]; then
+      printf '{"type":"as","data":[['
+      for index in $(seq 1 300); do printf '"notif.%s",' "$index"; done
+      printf '"notif.last"]]}\n'
+    else
+      printf '%s\n' '{"type":"as","data":[["notif.1","notif.2","notif.3","notif.4"]]}'
+    fi
     ;;
   activeConversations)
-    if [[ -n ${COLD_CONVERSATION_CACHE:-} && ! -e "$0.requested" ]]; then
+    if [[ -n ${OMALINK_TEST_MANY_THREADS:-} ]]; then
+      printf '{"type":"av","data":[['
+      for index in $(seq 1 300); do
+        printf '{"type":"(isa(s)xiixixa(xsss))","data":[1,"Thread %s",[["+155****%04d"]],%s,1,0,%s,10,-1,[]]},' \
+          "$index" "$index" "$index" "$index"
+      done
+      printf '{"type":"(isa(s)xiixixa(xsss))","data":[1,"Newest",[["+155****0001"]],9999,1,0,999,10,-1,[]]}]]}\n'
+    elif [[ -n ${COLD_CONVERSATION_CACHE:-} && ! -e "$0.requested" ]]; then
       printf '%s\n' '{"type":"av","data":[[]]}'
     else
       printf '%s\n' '{"type":"av","data":[[{"type":"(isa(s)xiixixa(xsss))","data":[1,"Newest",[["+15550000001"]],2000,1,0,7,10,-1,[[42,"image/jpeg","VGh1bWI=","PART_1.jpeg"]]]},{"type":"(isa(s)xiixixa(xsss))","data":[1,"Older",[["+15550000002"]],1000,2,1,8,11,-1,[]]}]]}'
@@ -211,6 +230,8 @@ printf '<svg xmlns="http://www.w3.org/2000/svg"><image href="http://192.168.1.1/
 { printf '\x89PNG\r\n\x1a\n'; head -c 5242880 /dev/zero; } >"$art_dir/big.png"
 ln -s /etc/hostname "$art_dir/link.jpg"
 printf '\x89PNG\r\n\x1a\npngbytes' >"$temp_dir/outside.png"
+ln -s /etc "$art_dir/escape"
+mkfifo "$art_dir/pipe"
 attachment_fixture="$attachment_dir/PART_1.jpeg"
 printf 'jpegbytes' >"$attachment_fixture"
 export OMALINK_TEST_ALBUM_ART="file://$art_dir/art.jpg"
@@ -224,6 +245,10 @@ jq -e '.devices[0].battery.charge == null and .devices[0].battery.charging == fa
   and (.devices[0].notifications | length) == 3' <<<"$junk_status" >/dev/null
 injected_status="$(OMALINK_TEST_EXTRA_DEVICE=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" status)"
 jq -e '(.devices | length) == 2 and ([.devices[].id] | index("../bad")) == null' <<<"$injected_status" >/dev/null
+many_status="$(OMALINK_TEST_MANY_NOTIFICATIONS=1 PATH="$temp_dir:/usr/bin" timeout 60 "$project_dir/bin/omalink" status)"
+jq -e '(.devices[0].notifications | length) == 25' <<<"$many_status" >/dev/null
+many_filtered="$(OMALINK_TEST_MANY_NOTIFICATIONS=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --notify-apps nomatch status)"
+jq -e '(.devices[0].notifications | length) == 0' <<<"$many_filtered" >/dev/null
 jq -e '.installed == true and (.devices | length) == 2 and .devices[0].name == "Pixel 9" and .devices[0].battery.charge == 71 and .devices[0].connectivity.type == "5G" and (.devices[0].notifications | length) == 3' <<<"$status" >/dev/null
 voicemail_status="$(PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --notify-apps "voicemail" status)"
 jq -e '(.devices[0].notifications | length) == 1 and .devices[0].notifications[0].appName == "Visual Voicemail"' <<<"$voicemail_status" >/dev/null
@@ -247,8 +272,14 @@ for rejected in \
   "file://$temp_dir/outside.png" \
   "file://$art_dir" \
   "file://$art_dir/link.jpg" \
+  "file://$art_dir/escape/hostname" \
+  "file://$art_dir/pipe" \
   "file://$art_dir/evil.svg" \
   "file://$art_dir/big.png" \
+  "file://$art_dir/../outside.png" \
+  "file://$art_dir/%2e%2e/%2e%2e/outside.png" \
+  "file://$art_dir/art%00.jpg" \
+  "file://$art_dir/art%2.jpg" \
   "file:///dev/zero"; do
   if [[ -n "$(album_art_case "$rejected")" ]]; then
     echo "album art was accepted from $rejected" >&2
@@ -287,6 +318,12 @@ jq -e 'length == 1 and .[0].name == "Alex Rivera" and .[0].number == "+155500000
 conversations="$(XDG_DATA_HOME="$temp_dir/data" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" conversations abc123)"
 jq -e 'length == 2 and .[0].threadId == 7 and .[0].unread == true and .[0].names[0] == "Alex Rivera" and .[1].incoming == false' <<<"$conversations" >/dev/null
 jq -e '.[0].attachments[0] == {partId: 42, mimeType: "image/jpeg", thumbnail: "VGh1bWI=", unique: "PART_1.jpeg"} and .[1].attachments == []' <<<"$conversations" >/dev/null
+many_threads="$(OMALINK_TEST_MANY_THREADS=1 XDG_DATA_HOME="$temp_dir/data" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" conversations abc123)"
+jq -e 'length == 200 and .[0].timestamp == 9999 and .[-1].timestamp == 102' <<<"$many_threads" >/dev/null
+many_messages="$(OMALINK_TEST_MANY_MESSAGES=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" messages abc123 7)"
+jq -e 'length == 200 and .[-1].body == "body 300" and .[0].body == "body 101"' <<<"$many_messages" >/dev/null
+thread_messages="$(PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" messages abc123 7)"
+jq -e 'length == 0' <<<"$thread_messages" >/dev/null
 rm -f "$temp_dir/busctl.requested"
 cold_conversations="$(COLD_CONVERSATION_CACHE=1 XDG_DATA_HOME="$temp_dir/data" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" conversations abc123)"
 jq -e 'length == 2 and .[0].threadId == 7' <<<"$cold_conversations" >/dev/null

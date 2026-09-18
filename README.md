@@ -124,6 +124,10 @@ URL, or an attachment.
   the phone sent that would run (programs, scripts, and desktop entries, judged
   by content as well as name) and hands everything else to your default
   application.
+- The phone decides how much data there is, so the lists are bounded: each
+  refresh reads at most 100 notifications and shows at most 25, and the
+  conversation list and message threads carry the newest 200 entries. An app
+  that posts or sends thousands cannot stall the bar or the message window.
 - OmaLink never builds a shell command out of phone data. Values passed to
   `kdeconnect-cli`, `busctl`, and the plugin's own helper are passed as single
   arguments and validated first.

@@ -17,6 +17,15 @@ usage() {
 album_art_max_bytes=$((4 * 1024 * 1024))
 icon_max_bytes=$((1 * 1024 * 1024))
 attachment_max_bytes=$((64 * 1024 * 1024))
+# How much of a phone's notification list is read per refresh. Each notification
+# costs several D-Bus reads, and the count is entirely the phone's to choose, so
+# an app posting thousands of them must not be able to stall the bar.
+notifications_read_max=100
+notifications_max=25
+# Same idea for the lists the phone fills: the panel and the Messages window are
+# scrollable, so only the newest entries are worth carrying into the shell.
+threads_max=200
+messages_max=200
 
 # The only directories a phone-supplied path may point into: KDE Connect's
 # cache directory (album art, downloaded attachments) and its per-user
@@ -179,15 +188,19 @@ notification_json() {
   local device_path="$1" notification_root="$1/notifications" raw notification_id notification_path
   local app_name internal_id title text icon_path dismissable reply_id is_conversation
   local -a notifications=()
+  local read_count=0 kept_count=0
 
   raw="$(busctl --user --json=short call org.kde.kdeconnect "$notification_root" \
     org.kde.kdeconnect.device.notifications activeNotifications 2>/dev/null || true)"
   while IFS= read -r notification_id; do
+    [[ $read_count -lt $notifications_read_max && $kept_count -lt $notifications_max ]] || break
+    read_count=$((read_count + 1))
     [[ $notification_id =~ ^[A-Za-z0-9._:-]+$ ]] || continue
     notification_path="$notification_root/$notification_id"
     app_name="$(dbus_json_property "$notification_path" appName)"
     internal_id="$(dbus_json_property "$notification_path" internalId)"
     notification_allowed "$app_name" "$internal_id" || continue
+    kept_count=$((kept_count + 1))
     title="$(dbus_json_property "$notification_path" title)"
     text="$(dbus_json_property "$notification_path" text)"
     icon_path="$(phone_icon_path "$(dbus_json_property "$notification_path" iconPath)")"
@@ -654,7 +667,8 @@ conversations() {
     }]
     | sort_by(.timestamp)
     | reverse
-  ' <<<"$raw"
+    | .[0:$threadsMax]
+  ' --argjson threadsMax "$threads_max" <<<"$raw"
 }
 
 messages() {
@@ -699,7 +713,8 @@ messages() {
         }]
     | unique_by(.timestamp, .body, ([.attachments[].unique] | join("|")))
     | sort_by(.timestamp)
-  ' "$capture_file"
+    | .[-$messagesMax:]
+  ' --argjson messagesMax "$messages_max" "$capture_file"
 }
 
 attachment() {
