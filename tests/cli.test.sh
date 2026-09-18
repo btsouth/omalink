@@ -113,7 +113,10 @@ case "${*: -1}" in
     fi
     ;;
   activeConversations)
-    if [[ -n ${OMALINK_TEST_MANY_ATTACHMENTS:-} ]]; then
+    if [[ -n ${OMALINK_TEST_LONG_PREVIEW:-} ]]; then
+      long="$(head -c 5000 /dev/zero | tr '\0' 'P')"
+      printf '{"type":"av","data":[[{"type":"(isa(s)xiixixa(xsss))","data":[1,"%s",[["+155****0001"]],2000,1,0,7,10,-1,[]]}]]}\n' "$long"
+    elif [[ -n ${OMALINK_TEST_MANY_ATTACHMENTS:-} ]]; then
       # Three chunks, because a single argument is capped at 128 KB.
       chunk="$(head -c 100000 /dev/zero | tr '\0' 'A')"
       printf '{"type":"av","data":[[{"type":"(isa(s)xiixixa(xsss))","data":[1,"Many",[["+155****0001"]],2000,1,0,7,10,-1,['
@@ -143,7 +146,10 @@ case "${*: -1}" in
     fi
     ;;
   title)
-    if [[ " $* " == *"/notif.9 "* ]]; then
+    if [[ -n ${OMALINK_TEST_LONG_TITLE:-} ]]; then
+      long="$(head -c 5000 /dev/zero | tr '\0' 'T')"
+      printf '{"type":"s","data":"%s"}\n' "$long"
+    elif [[ " $* " == *"/notif.9 "* ]]; then
       printf '%s\n' '{"type":"s","data":"<img src=\"http://192.168.1.1/x.png\">Hi"}'
     elif [[ " $* " == *"/notifications/"* ]]; then
       printf '%s\n' '{"type":"s","data":"Phone title"}'
@@ -367,6 +373,10 @@ jq -e '.[0].attachmentCount == 40 and (.[0].attachments | length) == 10
 [[ ${#many_attachments} -lt 100000 ]]
 huge_body="$(OMALINK_TEST_HUGE_BODY=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" messages abc123 7)"
 jq -e 'length == 1 and (.[0].body | length) == 8192' <<<"$huge_body" >/dev/null
+long_preview="$(OMALINK_TEST_LONG_PREVIEW=1 XDG_DATA_HOME="$temp_dir/data" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" conversations abc123)"
+jq -e '(.[0].preview | length) == 1024' <<<"$long_preview" >/dev/null
+long_title="$(OMALINK_TEST_LONG_TITLE=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" status)"
+jq -e '(.devices[0].notifications[0].title | length) == 1024' <<<"$long_title" >/dev/null
 rm -f "$temp_dir/busctl.requested"
 cold_conversations="$(COLD_CONVERSATION_CACHE=1 XDG_DATA_HOME="$temp_dir/data" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" conversations abc123)"
 jq -e 'length == 2 and .[0].threadId == 7' <<<"$cold_conversations" >/dev/null
