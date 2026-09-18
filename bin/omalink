@@ -7,6 +7,114 @@ usage() {
   exit 2
 }
 
+# --- Phone-supplied data ----------------------------------------------------
+# Everything KDE Connect reports comes from the paired phone, so none of it is
+# trusted here: a phone app picks the album art URL, the notification icon path
+# and the attachment contents. A path handed to the shell's image loader has to
+# be a local file KDE Connect itself wrote, or that loader would fetch remote
+# URLs and decode unbounded images inside the shell process. Every check fails
+# closed: art that does not qualify just leaves the placeholder icon.
+album_art_max_bytes=$((4 * 1024 * 1024))
+icon_max_bytes=$((1 * 1024 * 1024))
+attachment_max_bytes=$((64 * 1024 * 1024))
+
+# The only directories a phone-supplied path may point into: KDE Connect's
+# cache directory (album art, downloaded attachments) and its per-user
+# notification icon directory.
+phone_file_roots() {
+  local user="${USER:-$(id -un)}"
+  printf '%s\n' \
+    "${XDG_CACHE_HOME:-$HOME/.cache}/kdeconnect.daemon" \
+    "${TMPDIR:-/tmp}/kdeconnect_$user" \
+    "/tmp/kdeconnect_$user"
+}
+
+percent_decode() {
+  local encoded="$1" decoded="" escape
+  while [[ $encoded == *%* ]]; do
+    decoded+="${encoded%%\%*}"
+    encoded="${encoded#*\%}"
+    escape="${encoded:0:2}"
+    [[ $escape =~ ^[0-9A-Fa-f]{2}$ ]] || return 1
+    # Files KDE Connect writes have plain printable ASCII names. Anything
+    # else, including %00, which would truncate the path as it decodes, is
+    # not a path this plugin should follow.
+    case "${escape,,}" in
+      0* | 1* | 7f) return 1 ;;
+    esac
+    printf -v escape "\\x$escape"
+    decoded+="$escape"
+    encoded="${encoded:2}"
+  done
+  printf '%s' "$decoded$encoded"
+}
+
+# Canonical path of "$1" when it is a regular file inside one of the KDE
+# Connect directories and no larger than "$2" bytes; empty otherwise. Symlinks
+# are resolved first, so a link planted inside those directories cannot point
+# at something else.
+phone_file() {
+  local path="$1" limit="$2" real root size
+  [[ -n $path && $limit =~ ^[0-9]+$ ]] || return 0
+  real="$(readlink -f -- "$path" 2>/dev/null || true)"
+  [[ -n $real && -f $real ]] || return 0
+  while IFS= read -r root; do
+    root="$(readlink -f -- "$root" 2>/dev/null || true)"
+    [[ -n $root && $real == "$root"/* ]] || continue
+    size="$(stat -c %s -- "$real" 2>/dev/null || printf '0')"
+    (( size > 0 && size <= limit )) || return 0
+    printf '%s' "$real"
+    return 0
+  done < <(phone_file_roots)
+}
+
+# A phone-supplied path or file:// URL reduced to a local file we accept, or
+# empty. Every other scheme (http, https, data, qrc, image://) is dropped.
+phone_local_path() {
+  local raw="${1:-}" limit="${2:-0}" path
+  case $raw in
+    "") return 0 ;;
+    file://*) path="$(percent_decode "${raw#file://}")" || return 0 ;;
+    /*) path="$raw" ;;
+    *) return 0 ;;
+  esac
+  [[ $path == /* ]] || return 0
+  phone_file "$path" "$limit"
+}
+
+# Phone data is only ever decoded as a small raster image, so a phone-supplied
+# SVG or other markup cannot reach the image loader.
+raster_image() {
+  local magic
+  magic="$(head -c 12 -- "$1" 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+  case $magic in
+    89504e470d0a1a0a*) return 0 ;;  # PNG
+    ffd8ff*) return 0 ;;            # JPEG
+    47494638*) return 0 ;;          # GIF
+    424d*) return 0 ;;              # BMP
+    52494646*57454250) return 0 ;;  # WebP
+  esac
+  return 1
+}
+
+# file:// URI for album art the panel may load, or empty.
+phone_album_art() {
+  local path
+  path="$(phone_local_path "${1:-}" "$album_art_max_bytes")"
+  [[ -n $path ]] || return 0
+  raster_image "$path" || return 0
+  printf 'file://%s' "${path// /%20}"
+}
+
+# Local icon path for a phone notification, or empty.
+phone_icon_path() {
+  local path
+  path="$(phone_local_path "${1:-}" "$icon_max_bytes")"
+  [[ -n $path ]] || return 0
+  raster_image "$path" || return 0
+  printf '%s' "$path"
+}
+
 status() {
   if ! command -v kdeconnect-cli >/dev/null 2>&1; then
     jq -cn '{ok: true, installed: false, devices: [], statusText: "KDE Connect is not installed"}'
@@ -65,7 +173,7 @@ notification_json() {
     notification_allowed "$app_name" "$internal_id" || continue
     title="$(dbus_json_property "$notification_path" title)"
     text="$(dbus_json_property "$notification_path" text)"
-    icon_path="$(dbus_json_property "$notification_path" iconPath)"
+    icon_path="$(phone_icon_path "$(dbus_json_property "$notification_path" iconPath)")"
     dismissable="$(dbus_json_property "$notification_path" dismissable)"
     reply_id="$(dbus_json_property "$notification_path" replyId)"
     is_conversation="$(dbus_json_property "$notification_path" isConversation)"
@@ -164,7 +272,7 @@ media_json() {
   position="$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote position i)"
   is_playing="$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote isPlaying b)"
   can_seek="$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote canSeek b)"
-  album_art="$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote localAlbumArtUrl s)"
+  album_art="$(phone_album_art "$(dbus_property "$mpris_path" org.kde.kdeconnect.device.mprisremote localAlbumArtUrl s)")"
   jq -cn \
     --arg player "$player" \
     --arg title "$title" \
@@ -285,16 +393,17 @@ ensure_quiet_daemon_popups() {
   printf '# Written by OmaLink: it shows its own phone notification popups.\n[Event/notification]\nAction=\n' >"$config"
 }
 
+# Phone text reaches a popup, and notification daemons render both the summary
+# and the body as markup, so it is escaped first. sed does the escaping because
+# bash 5.2 and newer read & in a ${value//pattern/replacement} replacement as
+# the matched text, which silently swallowed the ampersands here.
 notify_escape() {
-  local value="$1"
-  value="${value//&/&amp;}"
-  value="${value//</&lt;}"
-  value="${value//>/&gt;}"
-  printf '%s' "$value"
+  printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
 }
 
 handle_posted() {
   local device_id="$1" notification_id="$2" notification_path app_name internal_id title text is_conversation icon_path silent summary body action
+  local -a icon_args=()
   [[ $device_id =~ ^[A-Za-z0-9]+$ && $notification_id =~ ^[A-Za-z0-9._:-]+$ ]] || return 0
   sleep 0.3
   notification_path="/modules/kdeconnect/devices/$device_id/notifications/$notification_id"
@@ -309,15 +418,20 @@ handle_posted() {
   title="$(dbus_json_property "$notification_path" title)"
   text="$(dbus_json_property "$notification_path" text)"
   is_conversation="$(dbus_json_property "$notification_path" isConversation)"
-  icon_path="$(dbus_json_property "$notification_path" iconPath)"
+  icon_path="$(phone_icon_path "$(dbus_json_property "$notification_path" iconPath)")"
   if [[ $is_conversation == true ]]; then
     summary="New message"
     body="Open OmaLink to read it"
   else
-    summary="${title:-${app_name:-Phone notification}}"
+    # The notification daemon renders both fields as markup, so phone text is
+    # escaped before it becomes a popup.
+    summary="$(notify_escape "${title:-${app_name:-Phone notification}}")"
     body="$(notify_escape "$text")"
   fi
-  action="$(timeout 300 notify-send -a OmaLink ${icon_path:+-i "$icon_path"} \
+  if [[ -n $icon_path ]]; then
+    icon_args=(-i "$icon_path")
+  fi
+  action="$(timeout 300 notify-send -a OmaLink "${icon_args[@]}" \
     -A "default=Open" -- "$summary" "$body" 2>/dev/null || true)"
   if [[ $action == default ]]; then
     open_panel || true
@@ -551,7 +665,7 @@ messages() {
 }
 
 attachment() {
-  local device_id="${1:-}" part_id="${2:-}" unique="${3:-}" device_path capture_dir capture_file monitor_pid path attempt
+  local device_id="${1:-}" part_id="${2:-}" unique="${3:-}" device_path capture_dir capture_file monitor_pid path arrived attempt
   [[ $device_id =~ ^[A-Za-z0-9]+$ && $part_id =~ ^-?[0-9]+$ && $unique =~ ^[[:print:]]+$ ]] || usage
   device_path="/modules/kdeconnect/devices/$device_id"
   capture_dir="$(mktemp -d)"
@@ -583,8 +697,16 @@ attachment() {
     sleep 0.5
   done
 
-  if [[ -z $path || ! -f $path ]]; then
-    echo "Attachment did not arrive from the phone" >&2
+  # The phone chose this file and the daemon wrote it, so the path is only used
+  # once it resolves to a small file inside KDE Connect's own directories.
+  arrived="$path"
+  path="$(phone_local_path "$arrived" "$attachment_max_bytes")"
+  if [[ -z $path ]]; then
+    if [[ -n $arrived ]]; then
+      echo "Attachment is not a file OmaLink can open safely" >&2
+    else
+      echo "Attachment did not arrive from the phone" >&2
+    fi
     exit 1
   fi
   printf '%s\n' "$path"
@@ -592,7 +714,8 @@ attachment() {
 
 attachment_save() {
   local source="${1:-}" downloads base name ext target n
-  [[ -n $source && -f $source ]] || usage
+  source="$(phone_local_path "$source" "$attachment_max_bytes")"
+  [[ -n $source ]] || usage
   downloads="$(xdg-user-dir DOWNLOAD 2>/dev/null || true)"
   [[ -n $downloads && $downloads != "$HOME" ]] || downloads="$HOME/Downloads"
   mkdir -p "$downloads"

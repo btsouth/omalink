@@ -533,6 +533,7 @@ Item {
               text: root.selectedConversation
                 ? Model.conversationTitle(root.selectedConversation)
                 : (root.composing ? "New message" : "Messages")
+              textFormat: Text.PlainText
               color: root.foreground
               font.family: root.fontFamily
               font.pixelSize: Style.font.display
@@ -658,6 +659,7 @@ Item {
                     Text {
                       Layout.fillWidth: true
                       text: Model.conversationTitle(modelData)
+                      textFormat: Text.PlainText
                       color: root.foreground
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.body
@@ -675,6 +677,7 @@ Item {
                   Text {
                     Layout.fillWidth: true
                     text: (modelData.incoming ? "" : "You: ") + Model.previewText(modelData)
+                    textFormat: Text.PlainText
                     color: root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
@@ -784,6 +787,8 @@ Item {
                           source: attachmentItem.thumbUri
                           fillMode: Image.PreserveAspectCrop
                           asynchronous: true
+                          sourceSize.width: 512
+                          sourceSize.height: 512
                         }
 
                         Rectangle {
@@ -901,6 +906,7 @@ Item {
               enabled: !root.sending
               placeholderText: "Contact name or phone number"
               text: root.recipientQuery
+              textFormat: Text.PlainText
               foreground: root.foreground
               font.family: root.fontFamily
               onTextEdited: {
@@ -937,6 +943,7 @@ Item {
                   Text {
                     Layout.fillWidth: true
                     text: modelData.name
+                    textFormat: Text.PlainText
                     color: root.foreground
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.body
@@ -946,6 +953,7 @@ Item {
 
                   Text {
                     text: modelData.number
+                    textFormat: Text.PlainText
                     color: root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
@@ -1068,8 +1076,12 @@ Item {
         Image {
           id: viewerImage
           anchors.centerIn: parent
-          source: root.viewerPath !== "" ? "file://" + root.viewerPath : ""
+          // The path comes from the phone's attachment, so the helper has
+          // already checked it; the decode size stays bounded here.
+          source: Model.localImageSource(root.viewerPath)
           asynchronous: true
+          sourceSize.width: 3840
+          sourceSize.height: 2160
           autoTransform: true
           fillMode: Image.PreserveAspectFit
           width: Math.min(implicitWidth, parent.width - Style.space(64))

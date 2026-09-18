@@ -261,8 +261,26 @@ function attachmentLabel(mimeType) {
 
 function thumbnailUri(attachment) {
   var thumbnail = String((attachment && attachment.thumbnail) || "")
-  if (thumbnail === "") return ""
+  // The phone sends this thumbnail; keep the data URI small and well formed.
+  if (thumbnail === "" || thumbnail.length > 1048576) return ""
+  if (!/^[A-Za-z0-9+/=]+$/.test(thumbnail)) return ""
   return "data:image/png;base64," + thumbnail
+}
+
+// Every Image.source that comes from the phone goes through here. The helper
+// already drops remote URLs and files outside KDE Connect's directories; this
+// keeps the panel from loading any other scheme even if that changed, so a
+// phone cannot make the shell fetch a URL or decode a file it chose.
+function localImageSource(value) {
+  var text = String(value === undefined || value === null ? "" : value).trim()
+  if (text === "") return ""
+  if (text.indexOf("file://") === 0) {
+    text = text.slice(7)
+  } else if (text.charAt(0) !== "/") {
+    return ""
+  }
+  if (text.charAt(0) !== "/" || text.indexOf("\n") !== -1 || text.indexOf("\0") !== -1) return ""
+  return "file://" + text.replace(/ /g, "%20")
 }
 
 function previewText(conversation) {
@@ -400,6 +418,7 @@ if (typeof module !== "undefined") {
     attachmentKind: attachmentKind,
     attachmentLabel: attachmentLabel,
     thumbnailUri: thumbnailUri,
+    localImageSource: localImageSource,
     previewText: previewText,
     redactedNotification: redactedNotification,
     notificationDisplayTitle: notificationDisplayTitle,

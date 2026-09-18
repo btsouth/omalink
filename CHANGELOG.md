@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1 - 2026-09-17
+
+- Security: treat phone-reported album art, notification icons, and attachment paths as untrusted input. They are loaded only when they resolve to a small raster image inside KDE Connect's cache or icon directory; remote URLs and other URI schemes, files outside those directories, symlinks that point elsewhere, oversized files, and SVG or other markup are dropped, and the panel decodes them at a bounded size. (Reported by HANCORE-linux in omarchy-plugin-marketplace#7127.)
+- Security: render phone text as plain text in the panel, and escape it in notification popups. The popup escaping had silently stopped working on bash 5.2 and newer, which swallowed the ampersands.
+- Security: cap the size of phone-supplied attachment thumbnails before they are decoded.
+
 ## 0.2.0 - 2026-09-15
 
 - Notification sources setting: comma-separated app names or Android packages, defaulting to messaging and authenticator apps, matched anywhere in either; clear it to allow everything.

@@ -42,7 +42,7 @@ if [[ " $* " == *" replyToConversation "* || " $* " == *" sendReply "* || " $* "
   exit 0
 fi
 if [[ " $* " == *" monitor "* ]]; then
-  printf '{"type":"signal","interface":"org.kde.kdeconnect.device.conversations","member":"attachmentReceived","payload":{"data":["%s","PART_1.jpeg"]}}\n' "$(dirname "$0")/attachment-full.jpg"
+  printf '{"type":"signal","interface":"org.kde.kdeconnect.device.conversations","member":"attachmentReceived","payload":{"data":["%s","PART_1.jpeg"]}}\n' "$OMALINK_TEST_ATTACHMENT"
   sleep 3
   exit 0
 fi
@@ -75,7 +75,7 @@ case "${*: -1}" in
     fi
     ;;
   isConversation)
-    if [[ " $* " == *"notif.3"* || " $* " == *"notif.4"* || " $* " == *"notif.10"* || " $* " == *"notif.11"* ]]; then
+    if [[ " $* " == *"notif.3"* || " $* " == *"notif.4"* || " $* " == *"notif.9"* || " $* " == *"notif.10"* ]]; then
       printf '%s\n' '{"type":"b","data":false}'
     else
       printf '%s\n' '{"type":"b","data":true}'
@@ -105,16 +105,40 @@ case "${*: -1}" in
       printf '%s\n' '{"type":"as","data":["Apple Music"]}'
     fi
     ;;
-  title) printf '%s\n' 's "Overthinking"' ;;
+  title)
+    if [[ " $* " == *"/notif.9 "* ]]; then
+      printf '%s\n' '{"type":"s","data":"<img src=\"http://192.168.1.1/x.png\">Hi"}'
+    elif [[ " $* " == *"/notifications/"* ]]; then
+      printf '%s\n' '{"type":"s","data":"Phone title"}'
+    else
+      printf '%s\n' 's "Overthinking"'
+    fi
+    ;;
+  text)
+    if [[ " $* " == *"/notif.9 "* ]]; then
+      printf '%s\n' '{"type":"s","data":"<b>Bold</b> phone text"}'
+    else
+      printf '%s\n' '{"type":"s","data":"Phone text"}'
+    fi
+    ;;
   artist) printf '%s\n' 's "usedcvnt"' ;;
   album) printf '%s\n' 's "Ultraviolet"' ;;
   player) printf '%s\n' 's "Apple Music"' ;;
-  localAlbumArtUrl) printf '%s\n' 's "file:///tmp/art.jpg"' ;;
+  localAlbumArtUrl) printf '%s\n' "s \"$OMALINK_TEST_ALBUM_ART\"" ;;
   volume) printf '%s\n' 'i 40' ;;
   length) printf '%s\n' 'i 144023' ;;
   position) printf '%s\n' 'i 94844' ;;
   isPlaying) printf '%s\n' 'b true' ;;
   canSeek) printf '%s\n' 'b true' ;;
+  iconPath)
+    if [[ " $* " == *"/notif.1 "* ]]; then
+      printf '%s\n' "{\"type\":\"s\",\"data\":\"$OMALINK_TEST_ICON_PATH\"}"
+    elif [[ " $* " == *"/notif.2 "* ]]; then
+      printf '%s\n' '{"type":"s","data":"/etc/hostname"}'
+    else
+      printf '%s\n' '{"type":"s","data":""}'
+    fi
+    ;;
   *) exit 1 ;;
 esac
 EOF
@@ -160,14 +184,67 @@ TEL;CELL:+15550000001
 END:VCARD
 EOF
 
+# Phone-supplied paths are only accepted from KDE Connect's own directories,
+# so the fixtures live where the daemon and its plugins would write them.
+export XDG_CACHE_HOME="$temp_dir/cache"
+export TMPDIR="$temp_dir/tmp"
+cache_root="$temp_dir/cache/kdeconnect.daemon"
+art_dir="$cache_root/kdeconnect/albumart"
+icon_dir="$temp_dir/tmp/kdeconnect_${USER:-$(id -un)}"
+attachment_dir="$cache_root/Pixel 9"
+mkdir -p "$art_dir" "$icon_dir" "$attachment_dir"
+printf '\xff\xd8\xff\xe0jpegbytes' >"$art_dir/art.jpg"
+printf '\xff\xd8\xff\xe0jpegbytes' >"$art_dir/art with space.jpg"
+printf '\x89PNG\r\n\x1a\npngbytes' >"$icon_dir/abc123"
+{ printf '\x89PNG\r\n\x1a\n'; head -c 2097152 /dev/zero; } >"$icon_dir/bigicon"
+printf '<svg xmlns="http://www.w3.org/2000/svg"><image href="http://192.168.1.1/x.png"/></svg>' >"$art_dir/evil.svg"
+{ printf '\x89PNG\r\n\x1a\n'; head -c 5242880 /dev/zero; } >"$art_dir/big.png"
+ln -s /etc/hostname "$art_dir/link.jpg"
+printf '\x89PNG\r\n\x1a\npngbytes' >"$temp_dir/outside.png"
+attachment_fixture="$attachment_dir/PART_1.jpeg"
+printf 'jpegbytes' >"$attachment_fixture"
+export OMALINK_TEST_ALBUM_ART="file://$art_dir/art.jpg"
+export OMALINK_TEST_ICON_PATH="$icon_dir/abc123"
+export OMALINK_TEST_ATTACHMENT="$attachment_fixture"
+
 status="$(PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" status)"
 jq -e '.installed == true and (.devices | length) == 2 and .devices[0].name == "Pixel 9" and .devices[0].battery.charge == 71 and .devices[0].connectivity.type == "5G" and (.devices[0].notifications | length) == 3' <<<"$status" >/dev/null
 voicemail_status="$(PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --notify-apps "voicemail" status)"
 jq -e '(.devices[0].notifications | length) == 1 and .devices[0].notifications[0].appName == "Visual Voicemail"' <<<"$voicemail_status" >/dev/null
 all_status="$(PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --notify-apps "" status)"
 jq -e '(.devices[0].notifications | length) == 4' <<<"$all_status" >/dev/null
-jq -e '.devices[0].media == {player: "Apple Music", title: "Overthinking", artist: "usedcvnt", album: "Ultraviolet", volume: 40, length: 144023, position: 94844, isPlaying: true, canSeek: true, albumArt: "file:///tmp/art.jpg", players: ["Apple Music"]}' <<<"$status" >/dev/null
+jq -e --arg art "file://$art_dir/art.jpg" '.devices[0].media == {player: "Apple Music", title: "Overthinking", artist: "usedcvnt", album: "Ultraviolet", volume: 40, length: 144023, position: 94844, isPlaying: true, canSeek: true, albumArt: $art, players: ["Apple Music"]}' <<<"$status" >/dev/null
 jq -e '.devices[1].media == null' <<<"$status" >/dev/null
+jq -e --arg icon "$icon_dir/abc123" '.devices[0].notifications[0].iconPath == $icon and .devices[0].notifications[1].iconPath == ""' <<<"$status" >/dev/null
+
+# Album art and notification icons come from the phone: only local files under
+# KDE Connect's directories, verified as small raster images, are accepted.
+album_art_case() {
+  OMALINK_TEST_ALBUM_ART="$1" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" status \
+    | jq -r '.devices[0].media.albumArt'
+}
+for rejected in \
+  "http://192.168.1.1/art.jpg" \
+  "https://example.com/art.jpg" \
+  "data:image/png;base64,AAAA" \
+  "qrc:/art.jpg" \
+  "file://$temp_dir/outside.png" \
+  "file://$art_dir" \
+  "file://$art_dir/link.jpg" \
+  "file://$art_dir/evil.svg" \
+  "file://$art_dir/big.png" \
+  "file:///dev/zero"; do
+  if [[ -n "$(album_art_case "$rejected")" ]]; then
+    echo "album art was accepted from $rejected" >&2
+    exit 1
+  fi
+done
+[[ "$(album_art_case "file://$art_dir/art%20with%20space.jpg")" == "file://$art_dir/art%20with%20space.jpg" ]]
+[[ "$(album_art_case "")" == "" ]]
+if [[ -n "$(OMALINK_TEST_ICON_PATH="$icon_dir/bigicon" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" status | jq -r '.devices[0].notifications[0].iconPath')" ]]; then
+  echo "an oversized notification icon was accepted" >&2
+  exit 1
+fi
 media="$(PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" media abc123)"
 jq -e '.title == "Overthinking" and .artist == "usedcvnt" and .players == ["Apple Music"]' <<<"$media" >/dev/null
 [[ "$(PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" media def456)" == "null" ]]
@@ -198,15 +275,22 @@ rm -f "$temp_dir/busctl.requested"
 cold_conversations="$(COLD_CONVERSATION_CACHE=1 XDG_DATA_HOME="$temp_dir/data" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" conversations abc123)"
 jq -e 'length == 2 and .[0].threadId == 7' <<<"$cold_conversations" >/dev/null
 [[ -e "$temp_dir/busctl.requested" ]]
-printf 'jpegbytes' >"$temp_dir/attachment-full.jpg"
 attachment_path="$(PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment abc123 42 PART_1.jpeg)"
-[[ $attachment_path == "$temp_dir/attachment-full.jpg" ]]
+[[ $attachment_path == "$attachment_fixture" ]]
+if OMALINK_TEST_ATTACHMENT=/etc/hostname PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment abc123 42 PART_1.jpeg >/dev/null 2>&1; then
+  echo "an attachment outside the KDE Connect directories was accepted" >&2
+  exit 1
+fi
 saved_home="$temp_dir/home"
 mkdir -p "$saved_home"
-first_save="$(HOME="$saved_home" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment-save "$temp_dir/attachment-full.jpg")"
-[[ $first_save == "$saved_home/Downloads/attachment-full.jpg" && -f $first_save ]]
-second_save="$(HOME="$saved_home" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment-save "$temp_dir/attachment-full.jpg")"
-[[ $second_save == "$saved_home/Downloads/attachment-full-1.jpg" && -f $second_save ]]
+first_save="$(HOME="$saved_home" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment-save "$attachment_fixture")"
+[[ $first_save == "$saved_home/Downloads/PART_1.jpeg" && -f $first_save ]]
+second_save="$(HOME="$saved_home" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment-save "$attachment_fixture")"
+[[ $second_save == "$saved_home/Downloads/PART_1-1.jpeg" && -f $second_save ]]
+if HOME="$saved_home" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment-save "$temp_dir/outside.png" >/dev/null 2>&1; then
+  echo "saving a file outside the KDE Connect directories was accepted" >&2
+  exit 1
+fi
 if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" dismiss '../bad' notification-1 >/dev/null 2>&1; then
   echo "invalid device id was accepted" >&2
   exit 1
@@ -267,6 +351,11 @@ watch_out="$(XDG_RUNTIME_DIR="$temp_dir" XDG_CONFIG_HOME="$temp_dir/xdg" PATH="$
 grep -q '^\[Event/notification\]$' "$temp_dir/xdg/kdeconnect.notifyrc"
 grep -q '^Action=$' "$temp_dir/xdg/kdeconnect.notifyrc"
 grep -q 'default=Open' "$temp_dir/notify-send.log"
+grep -q '&lt;img src="http://192.168.1.1/x.png"&gt;' "$temp_dir/notify-send.log"
+if grep -q '<img src=' "$temp_dir/notify-send.log"; then
+  echo "phone notification text reached the popup unescaped" >&2
+  exit 1
+fi
 grep -q 'New message' "$temp_dir/notify-send.log"
 [[ "$(grep -c '^notify ' "$temp_dir/notify-send.log")" == 2 ]]
 grep -q 'ipc call omalink.phone.DP-9 open' "$temp_dir/qs.log"

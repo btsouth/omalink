@@ -229,6 +229,7 @@ Panel {
     
                   Text {
                     text: modelData.name
+                    textFormat: Text.PlainText
                     color: root.foreground
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.body
@@ -249,6 +250,7 @@ Panel {
                     Text {
                       visible: text !== ""
                       text: Model.connectivityText(modelData)
+                      textFormat: Text.PlainText
                       color: root.dim
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.caption
@@ -312,18 +314,24 @@ Panel {
                 Item {
                   Layout.preferredWidth: Style.space(36)
                   Layout.preferredHeight: Style.space(36)
-  
+
+                  // Album art comes from the phone, so it is only loaded as a
+                  // verified local file and only decoded at thumbnail size.
+                  readonly property string artSource: Model.localImageSource(modelData.media.albumArt)
+
                   Image {
                     anchors.fill: parent
-                    visible: modelData.media.albumArt !== ""
-                    source: visible ? modelData.media.albumArt : ""
+                    visible: parent.artSource !== ""
+                    source: parent.artSource
                     fillMode: Image.PreserveAspectFit
                     asynchronous: true
+                    sourceSize.width: 128
+                    sourceSize.height: 128
                   }
-  
+
                   Text {
                     anchors.centerIn: parent
-                    visible: modelData.media.albumArt === ""
+                    visible: parent.artSource === ""
                     text: "󰝚"
                     color: root.foreground
                     font.family: root.fontFamily
@@ -338,6 +346,7 @@ Panel {
                   Text {
                     Layout.fillWidth: true
                     text: "NOW PLAYING · " + modelData.media.player
+                    textFormat: Text.PlainText
                     color: root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
@@ -349,6 +358,7 @@ Panel {
                   Text {
                     Layout.fillWidth: true
                     text: Model.mediaTitle(modelData.media)
+                    textFormat: Text.PlainText
                     color: root.foreground
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.body
@@ -360,6 +370,7 @@ Panel {
                     visible: text !== ""
                     Layout.fillWidth: true
                     text: Model.mediaSubtitle(modelData.media)
+                    textFormat: Text.PlainText
                     color: root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
@@ -491,6 +502,7 @@ Panel {
 
           Text {
             text: "Send text or link to " + root.shareDeviceName
+            textFormat: Text.PlainText
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
@@ -604,6 +616,7 @@ Panel {
                 Text {
                   Layout.fillWidth: true
                   text: Model.conversationTitle(modelData)
+                  textFormat: Text.PlainText
                   color: root.foreground
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.body
@@ -615,6 +628,7 @@ Panel {
                   visible: text !== ""
                   Layout.fillWidth: true
                   text: Model.previewText(modelData)
+                  textFormat: Text.PlainText
                   color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
@@ -686,17 +700,23 @@ Panel {
               Layout.preferredWidth: Style.space(28)
               Layout.preferredHeight: Style.space(28)
 
+              // The phone picks this icon, so it is only loaded as a verified
+              // local file and only decoded at thumbnail size.
+              readonly property string iconSource: Model.localImageSource(modelData.iconPath)
+
               Image {
                 anchors.fill: parent
-                visible: modelData.iconPath !== ""
-                source: visible ? "file://" + modelData.iconPath : ""
+                visible: parent.iconSource !== ""
+                source: parent.iconSource
                 fillMode: Image.PreserveAspectFit
                 asynchronous: true
+                sourceSize.width: 96
+                sourceSize.height: 96
               }
 
               Text {
                 anchors.centerIn: parent
-                visible: modelData.iconPath === ""
+                visible: parent.iconSource === ""
                 text: "󰂚"
                 color: root.foreground
                 font.family: root.fontFamily
@@ -711,6 +731,7 @@ Panel {
               Text {
                 Layout.fillWidth: true
                 text: modelData.appName
+                textFormat: Text.PlainText
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -721,6 +742,7 @@ Panel {
               Text {
                 Layout.fillWidth: true
                 text: Model.notificationDisplayTitle(modelData)
+                textFormat: Text.PlainText
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
@@ -732,6 +754,7 @@ Panel {
                 visible: text !== ""
                 Layout.fillWidth: true
                 text: Model.notificationDisplayText(modelData)
+                textFormat: Text.PlainText
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -773,6 +796,7 @@ Panel {
 
         Text {
           text: "Reply to " + root.notifReplyTitle
+          textFormat: Text.PlainText
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption

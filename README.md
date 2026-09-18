@@ -103,6 +103,34 @@ package), or clear the field to allow every notification. **Notification
 popups** can be set to Off to keep matching notifications listed in the panel
 without desktop popups.
 
+## Security
+
+Everything OmaLink reads comes from the paired phone and is treated as
+untrusted: any app on the phone can choose a notification title, an album art
+URL, or an attachment.
+
+- Images from the phone (album art, notification icons, attachment previews)
+  are loaded only when they are local files under KDE Connect's own cache and
+  icon directories, stay under a size limit, and are raster images (PNG, JPEG,
+  GIF, BMP, WebP). Remote URLs and other URI schemes, paths outside those
+  directories, symlinks that point elsewhere, oversized files, and SVG or other
+  markup are all dropped, and the shell decodes them at a bounded size so a
+  malicious image cannot exhaust memory.
+- Text from the phone is rendered as plain text in the panel and escaped in
+  desktop popups, so notification contents cannot inject markup or make the
+  popup daemon fetch something remote.
+- Attachments can be opened or saved only from KDE Connect's download
+  directory.
+- OmaLink never builds a shell command out of phone data. Values passed to
+  `kdeconnect-cli`, `busctl`, and the plugin's own helper are passed as single
+  arguments and validated first.
+
+OmaLink writes three things: one `[Event/notification]` line in
+`~/.config/kdeconnect.notifyrc` (so its own popups replace KDE Connect's),
+thread ids and timestamps in `~/.local/state/omalink/seen.json` for the unread
+badge (never message contents), and the files you explicitly save to your
+Downloads folder.
+
 ## Settings
 
 Widget settings live in the bar widget configuration: **Refresh interval**,
