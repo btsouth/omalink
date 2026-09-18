@@ -18,9 +18,14 @@ usage() {
 # be a local file KDE Connect itself wrote, or that loader would fetch remote
 # URLs and decode unbounded images inside the shell process. Every check fails
 # closed: art that does not qualify just leaves the placeholder icon.
-album_art_max_bytes=$((5 * 1024 * 1024))
+# KDE Connect refuses album art payloads over 5 MiB on the wire, but it
+# decompresses what it transfers, so a file on disk can be larger. Eight
+# megabytes leaves room for that without letting the shell read anything huge.
+album_art_max_bytes=$((8 * 1024 * 1024))
 icon_max_bytes=$((1 * 1024 * 1024))
-attachment_max_bytes=$((64 * 1024 * 1024))
+# Attachments are photos, videos and documents from the phone: a cap small
+# enough to reject a real video would be a bug, so this only refuses the absurd.
+attachment_max_bytes=$((2 * 1024 * 1024 * 1024))
 # How much of a phone's notification list is read per refresh. Each notification
 # costs several D-Bus reads, and the count is entirely the phone's to choose, so
 # an app posting thousands of them must not be able to stall the bar.
@@ -35,9 +40,9 @@ messages_max=200
 # cache directory (album art, downloaded attachments) and its per-user
 # notification icon directory.
 phone_file_roots() {
-  local user="${USER:-$(id -un)}"
+  local user="${USER:-$(id -un)}" home="${HOME:-}"
   printf '%s\n' \
-    "${XDG_CACHE_HOME:-$HOME/.cache}/kdeconnect.daemon" \
+    "${XDG_CACHE_HOME:-$home/.cache}/kdeconnect.daemon" \
     "${TMPDIR:-/tmp}/kdeconnect_$user" \
     "/tmp/kdeconnect_$user"
 }
@@ -49,9 +54,9 @@ percent_decode() {
     encoded="${encoded#*\%}"
     escape="${encoded:0:2}"
     [[ $escape =~ ^[0-9A-Fa-f]{2}$ ]] || return 1
-    # Files KDE Connect writes have plain printable ASCII names. Anything
-    # else, including %00, which would truncate the path as it decodes, is
-    # not a path this plugin should follow.
+    # Control characters are refused: %00 would truncate the path as it
+    # decodes, and nothing the daemon writes contains them. Every other byte,
+    # including UTF-8, decodes as it is.
     case "${escape,,}" in
       0* | 1* | 7f) return 1 ;;
     esac

@@ -1131,7 +1131,9 @@ Item {
           Text {
             visible: root.viewerStatus !== ""
             Layout.alignment: Qt.AlignHCenter
+            // The save confirmation carries the phone's file name.
             text: root.viewerStatus
+            textFormat: Text.PlainText
             color: "white"
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption

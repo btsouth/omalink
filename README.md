@@ -111,8 +111,9 @@ URL, or an attachment.
 
 - Images from the phone (album art, notification icons, attachment previews)
   are loaded only when they are local files under KDE Connect's own cache and
-  icon directories, stay under a size limit (album art 5 MB, icons 1 MB), and
-  are raster images (PNG, JPEG, GIF, BMP, WebP). Remote URLs and other URI schemes, paths outside those
+  icon directories, stay under a size limit (album art 8 MB, notification icons
+  1 MB), and are raster images (PNG, JPEG, GIF, BMP, WebP). Attachment
+  thumbnails are capped at 1 MB of base64 and must decode to a raster image. Remote URLs and other URI schemes, paths outside those
   directories, symlinks that point elsewhere, oversized files, and SVG or other
   markup are all dropped, and the shell decodes them at a bounded size so a
   malicious image cannot exhaust memory.
@@ -136,11 +137,18 @@ URL, or an attachment.
   `--`, and ids and attachment names may not start with a dash, so a
   phone-supplied value can never be read as an option.
 
-OmaLink writes three things: one `[Event/notification]` line in
+OmaLink writes: one `[Event/notification]` line in
 `~/.config/kdeconnect.notifyrc` (so its own popups replace KDE Connect's),
 thread ids and timestamps in `~/.local/state/omalink/seen.json` for the unread
-badge (never message contents), and the files you explicitly save to your
-Downloads folder.
+badge (never message contents), lock and pid files in `$XDG_RUNTIME_DIR` for the
+single notification watcher, and the files you explicitly save to your Downloads
+folder.
+
+What the checks do not cover, on purpose: the phone still chooses the contents
+of the files it sends, so a validated image is untrusted data being decoded (the
+size caps and decode bounds limit what that costs), KDE Connect can rewrite a
+file in its own cache between the check and the load, and art in a format other
+than the five above shows the placeholder instead.
 
 ## Settings
 

@@ -18,6 +18,10 @@
 - Security: the QML layer builds the `file://` URI and percent-encodes `%`, `#`, `?` and whitespace. Album art and notification icons are handed over as plain paths now, so a name containing `%2F` can no longer decode to a path outside the one the helper checked.
 - Fix: album art is capped at 5 MiB, which is what KDE Connect itself accepts, instead of 4 MiB.
 - Fix: the compose field in the Messages window had gained `textFormat`, a property Qt Quick Controls' TextField does not have, which stopped that window from loading. `tests/qml.test.sh` now checks that property additions sit on elements that have them, and that every `Image.source` fed by phone data goes through the shared gate.
+- Security: the "Saved to" line in the Messages window printed the phone's file name with Qt's default rich text, so a phone that named a file `<img src="http://...">x.png` made the shell fetch that URL when the save finished (proved with an offscreen Qt layout and a local server). Phone text is plain text in every window now.
+- Fix: attachments are capped at 2 GB instead of 64 MB, which refused real phone video and described it as unsafe to open. Album art is capped at 8 MB instead of 5 MB, because KDE Connect decompresses what it transfers, so the file on disk can be larger than the 5 MiB it accepts on the wire.
+- Fix: an unset `HOME` no longer makes the helper fail with "unbound variable" on the status path.
+- Tests: the notification read cap and the symlink canonicalization are pinned now (raising the cap or dropping `readlink -f` fails the suite), and the symlink fixtures point at a real image outside the roots so the raster check cannot mask whether the path was canonicalized.
 
 ## 0.2.0 - 2026-09-15
 

@@ -67,6 +67,7 @@ case "${*: -1}" in
   dismiss) echo "dismiss $*" >>"$0.log"; exit 0 ;;
   requestAllConversationThreads) : >"$0.requested"; exit 0 ;;
   appName)
+    printf 'read\n' >>"$0.appname.log"
     if [[ " $* " == *"notif.3"* || " $* " == *"notif.10"* ]]; then
       printf '%s\n' '{"type":"s","data":"Visual Voicemail"}'
     elif [[ " $* " == *"notif.4"* || " $* " == *"notif.11"* ]]; then
@@ -227,11 +228,12 @@ printf '\xff\xd8\xff\xe0jpegbytes' >"$art_dir/art with space.jpg"
 printf '\x89PNG\r\n\x1a\npngbytes' >"$icon_dir/abc123"
 { printf '\x89PNG\r\n\x1a\n'; head -c 2097152 /dev/zero; } >"$icon_dir/bigicon"
 printf '<svg xmlns="http://www.w3.org/2000/svg"><image href="http://192.168.1.1/x.png"/></svg>' >"$art_dir/evil.svg"
-{ printf '\x89PNG\r\n\x1a\n'; head -c 5242880 /dev/zero; } >"$art_dir/big.png"
-{ printf '\x89PNG\r\n\x1a\n'; head -c 5242872 /dev/zero; } >"$art_dir/at-limit.png"
-ln -s /etc/hostname "$art_dir/link.jpg"
+{ printf '\x89PNG\r\n\x1a\n'; head -c 8388601 /dev/zero; } >"$art_dir/big.png"
+{ printf '\x89PNG\r\n\x1a\n'; head -c 8388600 /dev/zero; } >"$art_dir/at-limit.png"
+ln -s "$temp_dir/outside.png" "$art_dir/link.jpg"
+ln -s "$temp_dir" "$art_dir/escape"
 printf '\x89PNG\r\n\x1a\npngbytes' >"$temp_dir/outside.png"
-ln -s /etc "$art_dir/escape"
+
 mkfifo "$art_dir/pipe"
 attachment_fixture="$attachment_dir/PART_1.jpeg"
 printf 'jpegbytes' >"$attachment_fixture"
@@ -250,6 +252,13 @@ many_status="$(OMALINK_TEST_MANY_NOTIFICATIONS=1 PATH="$temp_dir:/usr/bin" timeo
 jq -e '(.devices[0].notifications | length) == 25' <<<"$many_status" >/dev/null
 many_filtered="$(OMALINK_TEST_MANY_NOTIFICATIONS=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --notify-apps nomatch status)"
 jq -e '(.devices[0].notifications | length) == 0' <<<"$many_filtered" >/dev/null
+: >"$temp_dir/busctl.appname.log"
+OMALINK_TEST_MANY_NOTIFICATIONS=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --notify-apps nomatch status >/dev/null
+# The stub reports two devices, so the read cap is 100 per device.
+[[ "$(wc -l <"$temp_dir/busctl.appname.log")" == 200 ]]
+: >"$temp_dir/busctl.appname.log"
+OMALINK_TEST_MANY_NOTIFICATIONS=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" status >/dev/null
+[[ "$(wc -l <"$temp_dir/busctl.appname.log")" -le 60 ]]
 jq -e '.installed == true and (.devices | length) == 2 and .devices[0].name == "Pixel 9" and .devices[0].battery.charge == 71 and .devices[0].connectivity.type == "5G" and (.devices[0].notifications | length) == 3' <<<"$status" >/dev/null
 voicemail_status="$(PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --notify-apps "voicemail" status)"
 jq -e '(.devices[0].notifications | length) == 1 and .devices[0].notifications[0].appName == "Visual Voicemail"' <<<"$voicemail_status" >/dev/null
@@ -274,7 +283,7 @@ for rejected in \
   "file://$temp_dir/outside.png" \
   "file://$art_dir" \
   "file://$art_dir/link.jpg" \
-  "file://$art_dir/escape/hostname" \
+  "file://$art_dir/escape/outside.png" \
   "file://$art_dir/pipe" \
   "file://$art_dir/evil.svg" \
   "file://$art_dir/big.png" \
