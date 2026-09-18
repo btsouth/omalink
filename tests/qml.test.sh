@@ -116,6 +116,13 @@ for file in "$project_dir"/*.qml; do
   if grep -nE '\.source[[:space:]]*=' "$file" >/dev/null; then
     fail "Image.source assigned imperatively in $name"
   fi
+
+  # The phone's player is read through Model.mediaState, which is never null:
+  # reading it straight off the device is what filled the journal with
+  # "Cannot read property 'volume' of null".
+  if grep -nE 'modelData\.media\.' "$file" >/dev/null; then
+    fail "reads the phone's player without Model.mediaState in $name"
+  fi
 done
 
 [[ $status == 0 ]] || exit 1

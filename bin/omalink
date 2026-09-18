@@ -736,8 +736,8 @@ messages() {
   }
   trap cleanup_messages RETURN
 
-  # head ends the stream at the cap, and the writer dies on SIGPIPE, so a phone
-  # flooding the bus cannot fill the capture directory.
+  # The capture is bounded by time, not size: the monitor is killed again as soon
+  # as the request returns, and the request itself is capped at 12 seconds.
   stdbuf -oL busctl --user --verbose --json=short monitor -- org.kde.kdeconnect >"$capture_file" 2>/dev/null &
   monitor_pid=$!
   sleep 0.1
@@ -790,6 +790,8 @@ attachment() {
   }
   trap cleanup_attachment RETURN
 
+  # This capture is bounded by size as well as time: the loop below stops and the
+  # monitor is killed once the file passes capture_max_bytes.
   stdbuf -oL busctl --user --json=short monitor -- org.kde.kdeconnect >"$capture_file" 2>/dev/null &
   monitor_pid=$!
   sleep 0.1
