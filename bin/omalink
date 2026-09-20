@@ -39,6 +39,14 @@ thumbnail_max_chars=262144
 attachments_per_message=10
 contacts_max=2000
 capture_max_bytes=$((16 * 1024 * 1024))
+# D-Bus responses are also phone-influenced, so no direct call is slurped
+# without the same ceiling. head stops the reader; SIGPIPE stops the producer.
+dbus_bounded() {
+  local timeout_interval="$1"
+  shift
+  { timeout "$timeout_interval" "$@" 2>/dev/null || true; } \
+    | head -c "$capture_max_bytes" || true
+}
 # How much of a phone's notification list is read per refresh. Each notification
 # costs several D-Bus reads, and the count is entirely the phone's to choose, so
 # an app posting thousands of them must not be able to stall the bar.
@@ -67,6 +75,22 @@ phone_file_roots() {
     "/tmp/kdeconnect_$user" \
     "/tmp/kdeconnect_$login" \
     | sort -u
+}
+
+# Kill a busctl monitor as soon as its capture file crosses the byte ceiling.
+# This runs beside the request instead of after it, so a phone cannot grow the
+# capture while a call is pending. The monitor is killed, not the writer: the
+# monitor is the process holding the pipe that fills the file.
+capture_watchdog() {
+  local file="$1" pid="$2" size
+  while kill -0 "$pid" 2>/dev/null; do
+    size="$(stat -c %s -- "$file" 2>/dev/null || printf '0')"
+    if (( size > capture_max_bytes )); then
+      kill "$pid" 2>/dev/null || true
+      return 0
+    fi
+    sleep 0.05
+  done
 }
 
 percent_decode() {
@@ -229,8 +253,8 @@ notification_json() {
   local -a notifications=()
   local read_count=0 kept_count=0
 
-  raw="$(busctl --user --json=short call -- org.kde.kdeconnect "$notification_root" \
-    org.kde.kdeconnect.device.notifications activeNotifications 2>/dev/null || true)"
+  raw="$(dbus_bounded 5s busctl --user --json=short call -- org.kde.kdeconnect \
+    "$notification_root" org.kde.kdeconnect.device.notifications activeNotifications)"
   while IFS= read -r notification_id; do
     [[ $read_count -lt $notifications_read_max && $kept_count -lt $notifications_max ]] || break
     read_count=$((read_count + 1))
@@ -302,14 +326,14 @@ notification_allowed() {
 
 dbus_json_property() {
   local path="$1" property="$2"
-  busctl --user --json=short get-property -- org.kde.kdeconnect "$path" \
-    org.kde.kdeconnect.device.notifications.notification "$property" 2>/dev/null \
+  dbus_bounded 5s busctl --user --json=short get-property -- org.kde.kdeconnect "$path" \
+    org.kde.kdeconnect.device.notifications.notification "$property" \
     | jq -r '.data // empty' 2>/dev/null || true
 }
 
 dbus_property() {
   local path="$1" interface="$2" property="$3" signature="$4" raw
-  raw="$(busctl --user get-property -- org.kde.kdeconnect "$path" "$interface" "$property" 2>/dev/null || true)"
+  raw="$(dbus_bounded 5s busctl --user get-property -- org.kde.kdeconnect "$path" "$interface" "$property")"
   [[ $raw == "$signature "* ]] || return 0
   raw="${raw#* }"
   if [[ $signature == s ]]; then
@@ -325,8 +349,8 @@ dbus_property() {
 media_json() {
   local device_path="$1" mpris_path="$1/mprisremote" raw player_list
   local player title artist album volume length position is_playing can_seek album_art
-  raw="$(busctl --user --json=short get-property -- org.kde.kdeconnect "$mpris_path" \
-    org.kde.kdeconnect.device.mprisremote playerList 2>/dev/null || true)"
+  raw="$(dbus_bounded 5s busctl --user --json=short get-property -- org.kde.kdeconnect \
+    "$mpris_path" org.kde.kdeconnect.device.mprisremote playerList)"
   player_list="$(jq -c --argjson max "$players_max" --argjson chars "$media_max_chars" \
     '[(.data // [])[] | (tostring | .[0:$chars])][0:$max]' <<<"$raw" 2>/dev/null || true)"
   if [[ -z $player_list || $player_list == "[]" ]]; then
@@ -604,8 +628,8 @@ dismiss_all_notifications() {
   local device_id="${1:-}" notification_root raw notification_id notification_path app_name internal_id
   [[ $device_id =~ ^[A-Za-z0-9]+$ ]] || usage
   notification_root="/modules/kdeconnect/devices/$device_id/notifications"
-  raw="$(busctl --user --json=short call -- org.kde.kdeconnect "$notification_root" \
-    org.kde.kdeconnect.device.notifications activeNotifications 2>/dev/null || true)"
+  raw="$(dbus_bounded 5s busctl --user --json=short call -- org.kde.kdeconnect \
+    "$notification_root" org.kde.kdeconnect.device.notifications activeNotifications)"
   while IFS= read -r notification_id; do
     [[ $notification_id =~ ^[A-Za-z0-9._:-]+$ ]] || continue
     notification_path="$notification_root/$notification_id"
@@ -662,7 +686,7 @@ contacts() {
 }
 
 active_conversations_raw() {
-  busctl --user --json=short call -- org.kde.kdeconnect "$1" \
+  dbus_bounded 10s busctl --user --json=short call -- org.kde.kdeconnect "$1" \
     org.kde.kdeconnect.device.conversations activeConversations
 }
 
@@ -734,7 +758,7 @@ conversations() {
 }
 
 messages() {
-  local device_id="${1:-}" thread_id="${2:-}" device_path capture_dir capture_file monitor_pid
+  local device_id="${1:-}" thread_id="${2:-}" device_path capture_dir capture_file monitor_pid watchdog_pid
   [[ $device_id =~ ^[A-Za-z0-9]+$ && $thread_id =~ ^[0-9]+$ ]] || usage
   device_path="/modules/kdeconnect/devices/$device_id"
   capture_dir="$(mktemp -d)"
@@ -743,31 +767,28 @@ messages() {
 
   cleanup_messages() {
     [[ -z $monitor_pid ]] || kill "$monitor_pid" 2>/dev/null || true
+    [[ -z $watchdog_pid ]] || kill "$watchdog_pid" 2>/dev/null || true
     rm -r "$capture_dir"
   }
   trap cleanup_messages RETURN
 
-  # The capture is bounded by time, not size: the monitor is killed again as soon
-  # as the request returns, and the request itself is capped at 12 seconds.
+  # Both bounds are concurrent: the watchdog kills the monitor at the byte
+  # ceiling even while the request is pending, and timeout ends the request.
   stdbuf -oL busctl --user --verbose --json=short monitor -- org.kde.kdeconnect >"$capture_file" 2>/dev/null &
   monitor_pid=$!
+  capture_watchdog "$capture_file" "$monitor_pid" &
+  watchdog_pid=$!
   sleep 0.1
   timeout 12s busctl --user call -- org.kde.kdeconnect "$device_path" \
     org.kde.kdeconnect.device.conversations requestConversation xii "$thread_id" 0 30 >/dev/null \
     || true
 
-  # The usual half second, but stop waiting early if the phone flooded the bus:
-  # this capture is slurped whole by jq below, so its size is bounded here as
-  # well as its duration.
-  for attempt in $(seq 1 5); do
-    if (( $(stat -c %s -- "$capture_file" 2>/dev/null || printf '0') > capture_max_bytes )); then
-      break
-    fi
-    sleep 0.1
-  done
   kill "$monitor_pid" 2>/dev/null || true
   wait "$monitor_pid" 2>/dev/null || true
   monitor_pid=""
+  kill "$watchdog_pid" 2>/dev/null || true
+  wait "$watchdog_pid" 2>/dev/null || true
+  watchdog_pid=""
 
   jq -sc --argjson threadId "$thread_id" '
     [.[]
@@ -796,7 +817,7 @@ messages() {
 }
 
 attachment() {
-  local device_id="${1:-}" part_id="${2:-}" unique="${3:-}" mode="${4:-}" device_path capture_dir capture_file monitor_pid path arrived attempt
+  local device_id="${1:-}" part_id="${2:-}" unique="${3:-}" mode="${4:-}" device_path capture_dir capture_file monitor_pid watchdog_pid path arrived attempt
   [[ $device_id =~ ^[A-Za-z0-9]+$ && $part_id =~ ^-?[0-9]+$ && $unique =~ ^[[:print:]]+$ && $unique != -* ]] || usage
   device_path="/modules/kdeconnect/devices/$device_id"
   capture_dir="$(mktemp -d)"
@@ -805,17 +826,20 @@ attachment() {
 
   cleanup_attachment() {
     [[ -z $monitor_pid ]] || kill "$monitor_pid" 2>/dev/null || true
+    [[ -z $watchdog_pid ]] || kill "$watchdog_pid" 2>/dev/null || true
     rm -r "$capture_dir"
   }
   trap cleanup_attachment RETURN
 
-  # This capture is bounded by size as well as time: the loop below stops and the
-  # monitor is killed once the file passes capture_max_bytes.
+  # The watchdog runs while the request is in flight, so the capture can never
+  # grow past its ceiling, however long the phone holds the call open.
   stdbuf -oL busctl --user --json=short monitor -- org.kde.kdeconnect >"$capture_file" 2>/dev/null &
   monitor_pid=$!
+  capture_watchdog "$capture_file" "$monitor_pid" &
+  watchdog_pid=$!
   sleep 0.1
-  busctl --user call -- org.kde.kdeconnect "$device_path" \
-    org.kde.kdeconnect.device.conversations requestAttachmentFile xs "$part_id" "$unique" >/dev/null
+  timeout 30s busctl --user call -- org.kde.kdeconnect "$device_path" \
+    org.kde.kdeconnect.device.conversations requestAttachmentFile xs "$part_id" "$unique" >/dev/null || true
 
   path=""
   for attempt in $(seq 1 60); do
@@ -827,13 +851,19 @@ attachment() {
       | .payload.data[0]
     ' "$capture_file" 2>/dev/null || true; } | head -n 1 )"
     [[ -z $path ]] || break
-    # A phone that floods the bus with signals could otherwise fill the capture
-    # directory (tmpfs) for as long as this loop waits.
+    # The watchdog has already stopped the writer; stop waiting for a path too.
     if (( $(stat -c %s -- "$capture_file" 2>/dev/null || printf '0') > capture_max_bytes )); then
       break
     fi
     sleep 0.5
   done
+
+  kill "$monitor_pid" 2>/dev/null || true
+  wait "$monitor_pid" 2>/dev/null || true
+  monitor_pid=""
+  kill "$watchdog_pid" 2>/dev/null || true
+  wait "$watchdog_pid" 2>/dev/null || true
+  watchdog_pid=""
 
   # The phone chose this file and the daemon wrote it, so the path is only used
   # once it resolves to a small file inside KDE Connect's own directories.

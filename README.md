@@ -141,8 +141,11 @@ URL, or an attachment.
   list and message threads carry the newest 200 entries, notification titles and
   conversation previews are capped at 1 KiB, notification and message text at
   8 KiB, app names at 256 characters, ids at 128, media metadata at 256, contacts
-  at 2000 with 256-character names, and the capture the watcher reads at 16 MiB.
-  An app that posts or sends thousands cannot stall the bar or fill memory.
+  at 2000 with 256-character names, and message and attachment signal captures
+  at 16 MiB. A watchdog enforces that capture ceiling while the request is still
+  in flight, and the attachment request itself has a 30-second timeout, so a
+  pending phone call cannot keep the capture growing. Direct D-Bus responses
+  are capped and timed the same way before their contents are truncated.
 - OmaLink never builds a shell command out of phone data. Values passed to
   `kdeconnect-cli`, `busctl`, and the plugin's own helper are passed as single
   arguments and validated first, every `busctl` call separates its options with

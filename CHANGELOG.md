@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.2 - 2026-09-19
+
+Security, from the follow-up review in omarchy-plugin-marketplace#7127:
+
+- A watchdog now terminates the message and attachment D-Bus captures as soon
+  as either exceeds 16 MiB, including while a request is still pending. A
+  malicious phone can no longer hold a request open and keep growing the capture.
+- The attachment request has a 30-second timeout in addition to the existing
+  polling window.
+- Direct D-Bus property and list responses are bounded by size and time before
+  their contents are truncated, so they no longer have a separate unbounded
+  read path.
+
 ## 0.2.1 - 2026-09-17
 
 Security, from the report in omarchy-plugin-marketplace#7127 and the review rounds
