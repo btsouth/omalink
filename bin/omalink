@@ -940,6 +940,7 @@ contact_records_json() {
     /^TEL[;:]/ { if (phone_count < 20) phones[++phone_count] = substr(value(), 1, 128) }
     /^END:VCARD/ {
       gsub(/[\t\r\n]/, " ", name)
+      sub(/ +$/, "", name)
       if (length(name) > 256) name = substr(name, 1, 256)
       for (i = 1; i <= phone_count; i++) {
         if (name == "") continue
@@ -973,13 +974,25 @@ conversation_list_json() {
   local raw="$1" contacts_file="$2"
   jq -c --slurpfile contactsFile "$contacts_file" '
     $contactsFile[0] as $contacts |
-    def number_key:
-      gsub("[^0-9]"; "") | if length > 10 then .[-10:] else . end;
-    ($contacts | reduce .[] as $contact ({};
-      .[($contact.number | number_key)] = $contact.name)) as $contactNames
+    def phone_key: gsub("[^0-9]"; "") | sub("^0+"; "");
+    def phone_matches($left; $right):
+      $left != "" and $right != "" and
+      ([(($left | length)), (($right | length))] | min) >= 7 and
+      ($left == $right or
+       ((($left | length) >= ($right | length)) and ($left | endswith($right))) or
+       ((($right | length) >= ($left | length)) and ($right | endswith($left))));
+    ($contacts
+      | map({name: .name, key: (.number | phone_key)})
+      | map(select(.key != ""))) as $contactKeys
     |
     def display_name:
-      . as $address | ($address | number_key) as $key | $contactNames[$key] // $address;
+      . as $address
+      | ($address | phone_key) as $key
+      | if $key == "" then $address
+        else
+          ([$contactKeys[] | select(phone_matches($key; .key)) | .name] | unique) as $names
+          | if ($names | length) == 1 then $names[0] else $address end
+        end;
     [.data[0][]? | .data as $message | {
       threadId: $message[6],
       preview: (($message[1] // "") | tostring | .[0:$previewMax]),

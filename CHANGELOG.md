@@ -15,6 +15,10 @@
 - Show KDE Connect's cached thread list at once in the panel and the Messages
   window, then update it from the phone. The panel keeps unread messages
   current while closed whenever a notification arrives.
+- Match national and international contact-number formats without collapsing
+  distinct numbers onto the same short suffix. Senders without digits and
+  blank contact numbers no longer match, and CRLF card names lose trailing
+  whitespace.
 
 - Add per-app notification rules for the selected phone. Allow, Mute or Default
   apps seen in the phone's current notifications, matched by validated Android

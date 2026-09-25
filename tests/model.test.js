@@ -75,6 +75,21 @@ const smsUpdated = model.upsertConversationAfterSms([
 assert.equal(smsUpdated[0].threadId, 9)
 assert.equal(smsUpdated[0].preview, "New")
 assert.equal(smsUpdated[0].pendingSync, true)
+assert.equal(model.phoneNumbersMatch("+61 436 000 001", "0436 000 001"), true)
+assert.equal(model.phoneNumbersMatch("+1 555 000 0001", "(555) 000-0001"), true)
+assert.equal(model.phoneNumbersMatch("+1 212 555 1234", "+1 312 555 1234"), false)
+assert.equal(model.phoneKey("OKTA"), "")
+assert.equal(model.phoneNumbersMatch("OKTA", "OKTA"), false)
+const intlSms = model.upsertConversationAfterSms([
+  { threadId: 12, addresses: ["+61436000001"], names: ["Jordan"], preview: "Old", timestamp: 1000 }
+], "0436 000 001", "Jordan", "New", 2000)
+assert.equal(intlSms[0].threadId, 12)
+const distinctSms = model.upsertConversationAfterSms([
+  { threadId: 13, addresses: ["+12125551234"], names: ["First"], preview: "Old", timestamp: 1000 }
+], "+1 312 555 1234", "Second", "New", 2000)
+assert.equal(distinctSms.length, 2)
+assert.equal(distinctSms[0].threadId, null)
+assert.equal(distinctSms[1].threadId, 13)
 const newSms = model.upsertConversationAfterSms([], "+15550000002", "New person", "Hello", 2000)[0]
 assert.equal(newSms.pending, true)
 assert.equal(newSms.threadId, null)
