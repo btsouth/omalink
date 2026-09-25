@@ -71,6 +71,12 @@ const smsUpdated = model.upsertConversationAfterSms([
 assert.equal(smsUpdated[0].threadId, 9)
 assert.equal(smsUpdated[0].preview, "New")
 assert.equal(smsUpdated[0].pendingSync, true)
+assert.equal(model.phoneKey("+61 436 000 001"), model.phoneKey("0436 000 001"))
+assert.equal(model.phoneKey("OKTA"), "")
+const intlSms = model.upsertConversationAfterSms([
+  { threadId: 12, addresses: ["+61436000001"], names: ["Jordan"], preview: "Old", timestamp: 1000 }
+], "0436 000 001", "Jordan", "New", 2000)
+assert.equal(intlSms[0].threadId, 12)
 const newSms = model.upsertConversationAfterSms([], "+15550000002", "New person", "Hello", 2000)[0]
 assert.equal(newSms.pending, true)
 assert.equal(newSms.threadId, null)

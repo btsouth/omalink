@@ -149,6 +149,8 @@ case "${*: -1}" in
           "$index" "$index" "$index" "$index"
       done
       printf '{"type":"(isa(s)xiixixa(xsss))","data":[1,"Newest",[["+155****0001"]],9999,1,0,999,10,-1,[]]}]]}\n'
+    elif [[ -n ${OMALINK_TEST_INTL_CONTACTS:-} ]]; then
+      printf '%s\n' '{"type":"av","data":[[{"type":"(isa(s)xiixixa(xsss))","data":[1,"Hi",[["+61436000001"]],2000,1,0,7,10,-1,[]]},{"type":"(isa(s)xiixixa(xsss))","data":[1,"Code",[["OKTA"]],1000,1,0,8,11,-1,[]]}]]}'
     elif [[ -n ${COLD_CONVERSATION_CACHE:-} && ! -e "$0.requested" ]]; then
       printf '%s\n' '{"type":"av","data":[[]]}'
     else
@@ -267,6 +269,14 @@ FN:Alex Rivera
 TEL;CELL:+15550000001
 END:VCARD
 EOF
+
+# National and international forms of a number must match, a contact with a
+# blank number must not claim senders that have no digits, and CRLF cards
+# must not leave trailing whitespace on names.
+intl_contact_dir="$temp_dir/data-intl/kpeoplevcard/kdeconnect-abc123"
+mkdir -p "$intl_contact_dir"
+printf 'BEGIN:VCARD\r\nVERSION:2.1\r\nFN:Jordan Lee\r\nTEL;CELL:0436 000 001\r\nEND:VCARD\r\n' >"$intl_contact_dir/jordan.vcf"
+printf 'BEGIN:VCARD\r\nVERSION:2.1\r\nFN:Blank Number\r\nTEL;CELL:\r\nEND:VCARD\r\n' >"$intl_contact_dir/blank.vcf"
 
 # Phone-supplied paths are only accepted from KDE Connect's own directories,
 # so the fixtures live where the daemon and its plugins would write them.
@@ -449,6 +459,8 @@ long_title="$(OMALINK_TEST_LONG_TITLE=1 PATH="$temp_dir:/usr/bin" "$project_dir/
 jq -e '(.devices[0].notifications[0].title | length) == 1024
   and (.devices[0].notifications[0].text | length) == 8192' <<<"$long_title" >/dev/null
 rm -f "$temp_dir/busctl.requested"
+intl_conversations="$(OMALINK_TEST_INTL_CONTACTS=1 XDG_DATA_HOME="$temp_dir/data-intl" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" conversations abc123)"
+jq -e '.[0].names == ["Jordan Lee"] and .[1].names == ["OKTA"]' <<<"$intl_conversations" >/dev/null
 cold_conversations="$(COLD_CONVERSATION_CACHE=1 XDG_DATA_HOME="$temp_dir/data" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" conversations abc123)"
 jq -e 'length == 2 and .[0].threadId == 7' <<<"$cold_conversations" >/dev/null
 [[ -e "$temp_dir/busctl.requested" ]]

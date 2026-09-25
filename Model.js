@@ -149,7 +149,7 @@ function updateConversationAfterSend(conversations, threadId, body, timestamp) {
 
 function phoneKey(value) {
   var digits = String(value || "").replace(/[^0-9]/g, "")
-  return digits.length > 10 ? digits.slice(-10) : digits
+  return digits.length > 9 ? digits.slice(-9) : digits
 }
 
 function conversationMatchesNumber(conversation, number) {

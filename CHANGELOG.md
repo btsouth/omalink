@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Contact names now match national and international forms of the same number
+  (for example `+61 436 …` and `0436 …`). Numbers are compared on their last
+  9 digits instead of 10, which left non-US numbers unmatched.
+- Senders with no digits in their address (such as `OKTA` or `Bunnings`) no
+  longer take the name of a contact whose card has a blank phone number.
+- Contact names from vCards with CRLF line endings no longer carry a trailing
+  space.
+
 ## 0.2.2 - 2026-09-19
 
 Security, from the follow-up review in omarchy-plugin-marketplace#7127:

@@ -662,6 +662,7 @@ contact_records_json() {
     /^TEL[;:]/ { phones[++phone_count] = value() }
     /^END:VCARD/ {
       gsub(/[\t\r\n]/, " ", name)
+      sub(/ +$/, "", name)
       if (length(name) > 256) name = substr(name, 1, 256)
       for (i = 1; i <= phone_count; i++) {
         if (name == "") continue
@@ -728,13 +729,17 @@ conversations() {
     exit 1
   fi
   jq -c --argjson contacts "$contacts" '
+    # Match on the last 9 digits so +61 4xx and 04xx forms of a number agree.
+    # Senders with no digits and contacts with blank numbers never match.
     def number_key:
-      gsub("[^0-9]"; "") | if length > 10 then .[-10:] else . end;
+      gsub("[^0-9]"; "") | if length > 9 then .[-9:] else . end;
     ($contacts | reduce .[] as $contact ({};
-      .[($contact.number | number_key)] = $contact.name)) as $contactNames
+      ($contact.number | number_key) as $key
+      | if $key == "" then . else .[$key] = $contact.name end)) as $contactNames
     |
     def display_name:
-      . as $address | ($address | number_key) as $key | $contactNames[$key] // $address;
+      . as $address | ($address | number_key) as $key
+      | if $key == "" then $address else $contactNames[$key] // $address end;
     [.data[0][]? | .data as $message | {
       threadId: $message[6],
       preview: (($message[1] // "") | tostring | .[0:$previewMax]),
