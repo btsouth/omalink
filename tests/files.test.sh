@@ -104,6 +104,19 @@ for index in {1..33}; do touch "$temp_dir/files/$index"; paths+=("$temp_dir/file
 run_expect 2 failed file_count abc123 "${paths[@]}"
 [[ ! -e $temp_dir/all.calls ]]
 
+# Dependency failures are pre-dispatch and retain the original batch count, so
+# the UI can distinguish them from an interrupted or malformed helper result.
+mkdir "$temp_dir/missing-tool"
+for tool in bash jq busctl timeout head; do ln -s "$(command -v "$tool")" "$temp_dir/missing-tool/$tool"; done
+PATH="$temp_dir/missing-tool" run_expect 1 failed dependency abc123 "$ordinary"
+jq -e '.count == 1' >/dev/null <<<"$output"
+rm "$temp_dir/missing-tool/jq"
+actual=0
+output="$(PATH="$temp_dir/missing-tool" "$helper" abc123 "$ordinary")" || actual=$?
+[[ $actual == 1 ]]
+jq -e '.count == 1 and .code == "dependency"' >/dev/null <<<"$output"
+[[ ! -e $temp_dir/all.calls ]]
+
 # Exact byte round trip for spaces, shell metacharacters, Unicode and newlines.
 # None of these names can become an option, shell command, URI fragment or query.
 weird="$temp_dir/files/"$'--address=evil résumé #?% $(touch SENTINEL) `echo bad`\n'

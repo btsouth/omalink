@@ -5,7 +5,7 @@ umask 077
 # Bounds below count filesystem bytes, not locale-dependent character counts.
 export LC_ALL=C
 
-count=0
+count=$(( $# > 0 ? $# - 1 : 0 ))
 result() {
   local ok="$1" state="$2" code="$3" message="$4" exit_code="$5"
   jq -cn --argjson ok "$ok" --arg state "$state" --arg code "$code" \
@@ -15,7 +15,7 @@ result() {
 }
 
 if ! command -v jq >/dev/null; then
-  printf '%s\n' '{"ok":false,"state":"failed","code":"dependency","count":0,"statusText":"Install jq to share files"}'
+  printf '{"ok":false,"state":"failed","code":"dependency","count":%s,"statusText":"Install jq to share files"}\n' "$count"
   exit 1
 fi
 for dependency in busctl timeout stat head; do
