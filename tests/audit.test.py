@@ -23,7 +23,7 @@ with tempfile.TemporaryDirectory() as directory:
         path.write_text('#!/usr/bin/python3\n' + source)
         path.chmod(0o755)
 
-    script('kdeconnect-cli', "print('abc123 ' + 'N' * 100000)\n")
+    script('kdeconnect-cli', "import sys\nprint('kdeconnect-cli 26.08.1' if '--version' in sys.argv else 'abc123')\n")
 
     script('busctl', '''
 import json, os, signal, sys, time
@@ -32,6 +32,15 @@ root = Path(os.environ['AUDIT_ROOT'])
 args = sys.argv[1:]
 with (root / 'args').open('a') as log: log.write(json.dumps(args) + '\\n')
 mode = os.environ.get('AUDIT_MODE', '')
+if 'GetNameOwner' in args:
+    print('{"type":"s","data":[":1.99"]}'); sys.exit(0)
+if args[-1:] == ['name']:
+    print('s ' + json.dumps('N' * 100000)); sys.exit(0)
+if args[-1:] == ['type']: print('s "phone"'); sys.exit(0)
+if args[-1:] in (['isPaired'], ['isReachable']): print('b true'); sys.exit(0)
+if args[-1:] == ['supportedPlugins']: print('{"type":"as","data":[]}'); sys.exit(0)
+if args[-1:] == ['loadedPlugins']: print('{"type":"as","data":[["kdeconnect_sms","kdeconnect_notifications"]]}'); sys.exit(0)
+if 'isPluginEnabled' in args: print('{"type":"b","data":[true]}'); sys.exit(0)
 if 'monitor' in args or 'requestConversation' in args or 'requestAttachmentFile' in args:
     with (root / 'pids').open('a') as log: log.write(str(os.getpid()) + '\\n')
 if 'monitor' in args:

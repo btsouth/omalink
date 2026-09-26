@@ -63,7 +63,7 @@ while IFS= read -r match; do
   line="${remainder%%:*}"
   owner="$(owner_of "$project_dir/$file" "$line")"
   case $owner in
-    'Text{' | 'TextArea{' | 'TextEdit{' ) ;;
+    'Text{' | 'TextArea{' | 'TextEdit{' | 'Controls.TextArea{' ) ;;
     *) fail "textFormat on an element that has no such property: $file:$line (${owner:-unknown owner})" ;;
   esac
 done < <(cd "$project_dir" && grep -rn 'textFormat:' --include='*.qml' . | sed 's|^\./||')

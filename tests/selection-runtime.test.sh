@@ -13,12 +13,13 @@ cat >"$work/bin/omalink" <<'EOF'
 #!/bin/bash
 while [[ $1 == --* ]]; do shift 2; done
 case $1 in
-  status) printf '{"ok":true,"installed":true,"devices":[{"id":"abc123","name":"Pixel"},{"id":"def456","name":"Galaxy"}]}\n' ;;
+  status) printf '{"schemaVersion":1,"ok":true,"installed":true,"observedAt":1,"discoveryTruncated":false,"backend":{"name":"kdeconnect","version":"26.08.1","versionSource":"kdeconnect-cli","available":true},"devices":[{"id":"abc123","name":"Pixel","paired":true,"reachable":true},{"id":"def456","name":"Galaxy","paired":true,"reachable":true}]}\n' ;;
+  diagnostics) printf '{"schemaVersion":1,"ok":true,"installed":true,"observedAt":1,"discoveryTruncated":false,"backend":{"name":"kdeconnect","version":"26.08.1","versionSource":"kdeconnect-cli","available":true},"devices":[{"label":"device-1","id":"PRIVATE","name":"PRIVATE","paired":true,"reachable":true,"type":"phone","capabilities":{}}]}\n' ;;
   watch) sleep 30 ;;
   conversations) sleep 0.3; printf '[{"threadId":7,"names":["%s"],"addresses":["+15550000001"],"preview":"fixture","timestamp":1000,"unread":true}]\n' "$2" ;;
   seen) sleep 0.3; printf '{}\n' ;;
   ring) printf '%s\n' "$2" >>"$OMALINK_SELECTION_LOG"; sleep 0.3 ;;
-  *) : ;;
+  *) printf "unexpected:%s\n" "$1" >>"$OMALINK_SELECTION_LOG" ;;
 esac
 EOF
 chmod +x "$work/bin/omalink"

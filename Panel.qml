@@ -21,7 +21,7 @@ Panel {
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property color iconColor: phone.connected ? foreground : dim
-  readonly property var notifications: activePhoneReady && phone.selectedDevice && Array.isArray(phone.selectedDevice.notifications)
+  readonly property var notifications: phone.canUseCapability(activePhoneId, "notifications") && phone.selectedDevice && Array.isArray(phone.selectedDevice.notifications)
     ? Model.visibleNotifications(phone.selectedDevice.notifications, phone.notifySources) : []
   property string shareDeviceId: ""
   property string shareDeviceName: ""
@@ -33,6 +33,10 @@ Panel {
   property int selectionGeneration: 0
   readonly property string activePhoneId: phone.selectedDeviceId
   readonly property bool activePhoneReady: phone.selectedDeviceReady
+  readonly property bool messagesReady: phone.canUseCapability(activePhoneId, "messaging")
+  property bool showDiagnostics: false
+  property bool showCapabilities: false
+  onMessagesReadyChanged: invalidatePhoneReads()
   onActivePhoneIdChanged: {
     shareDeviceId = ""
     shareDeviceName = ""
@@ -49,7 +53,7 @@ Panel {
     selectionGeneration++
     unreadRaw = []
     seenMap = ({})
-    if (opened && activePhoneReady) { refreshSeen(); refreshUnread() }
+    if (opened && messagesReady) { refreshSeen(); refreshUnread() }
   }
 
   function persistSelection(deviceId, deviceName) {
@@ -69,7 +73,7 @@ Panel {
 
   function selectDevice(deviceId) {
     var device = Model.deviceById(phone.devices, deviceId)
-    if (device && phone.canUseDevice(deviceId)) persistSelection(device.id, device.name)
+    if (device && phone.canSelectDevice(deviceId)) persistSelection(device.id, device.name)
   }
   readonly property var unreadConversations: Model.filterUnseenUnread(unreadRaw, seenMap)
 
@@ -85,7 +89,7 @@ Panel {
   }
 
   function refreshUnread() {
-    if (!activePhoneReady || unreadProcess.running) return
+    if (!messagesReady || unreadProcess.running) return
     unreadProcess.deviceId = activePhoneId
     unreadProcess.generation = selectionGeneration
     unreadProcess.command = [phone.helperPath, "conversations", activePhoneId]
@@ -93,7 +97,7 @@ Panel {
   }
 
   function refreshSeen() {
-    if (!activePhoneReady || seenProcess.running) return
+    if (!messagesReady || seenProcess.running) return
     seenProcess.deviceId = activePhoneId
     seenProcess.generation = selectionGeneration
     seenProcess.command = [phone.helperPath, "seen", activePhoneId]
@@ -101,7 +105,7 @@ Panel {
   }
 
   function markSeenEntries(conversations) {
-    if (!activePhoneReady) return
+    if (!messagesReady) return
     var args = [phone.helperPath, "mark-seen", activePhoneId]
     var updated = {}
     for (var key in seenMap) updated[key] = seenMap[key]
@@ -121,7 +125,7 @@ Panel {
   }
 
   function openMessages(payload) {
-    if (!activePhoneReady) return
+    if (!messagesReady) return
     payload.deviceId = activePhoneId
     payload.deviceName = phone.selectedDeviceName
     root.close()
@@ -132,7 +136,7 @@ Panel {
     id: unreadProcess
     property string deviceId: ""
     property int generation: -1
-    readonly property bool current: root.activePhoneReady && deviceId === root.activePhoneId && generation === root.selectionGeneration
+    readonly property bool current: root.messagesReady && deviceId === root.activePhoneId && generation === root.selectionGeneration
     onExited: if (!current && root.opened) Qt.callLater(root.refreshUnread)
     stdout: StdioCollector {
       waitForEnd: true
@@ -144,7 +148,7 @@ Panel {
     id: seenProcess
     property string deviceId: ""
     property int generation: -1
-    readonly property bool current: root.activePhoneReady && deviceId === root.activePhoneId && generation === root.selectionGeneration
+    readonly property bool current: root.messagesReady && deviceId === root.activePhoneId && generation === root.selectionGeneration
     onExited: if (!current && root.opened) Qt.callLater(root.refreshSeen)
     stdout: StdioCollector {
       waitForEnd: true
@@ -202,6 +206,7 @@ Panel {
       id: scrollArea
       anchors.fill: parent
       clip: true
+      contentWidth: availableWidth
 
       // The content outgrows the fitted height when the phone has many
       // notifications; scroll instead of clipping the bottom buttons.
@@ -246,7 +251,7 @@ Panel {
         Text {
           visible: phone.installed && !phone.statusFailed && phone.devices.length === 0 && root.activePhoneId === ""
           Layout.fillWidth: true
-          text: "Open pairing, then approve this computer in the KDE Connect app on your Android phone."
+          text: qsTr("Open KDE Connect on your Android phone or iPhone, then open pairing. Keep the iPhone app open during setup. Messaging is currently available through Android KDE Connect only.")
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall
@@ -256,8 +261,7 @@ Panel {
         Text {
           visible: phone.installed && root.activePhoneId !== "" && !root.activePhoneReady
           Layout.fillWidth: true
-          text: phone.statusFailed ? qsTr("Refresh the connection before using phone actions.")
-            : qsTr("%1 is offline or unavailable. Reconnect it, manage pairing, or choose another phone below.").arg(phone.selectedDeviceName)
+          text: phone.setupText(phone.selectedDevice)
           textFormat: Text.PlainText
           color: root.dim
           font.family: root.fontFamily
@@ -275,6 +279,26 @@ Panel {
           onClicked: phone.refresh()
         }
   
+        Text {
+          Layout.fillWidth: true
+          text: phone.freshnessText + (phone.backendVersion !== "" ? " · KDE Connect " + phone.backendVersion : "")
+          textFormat: Text.PlainText
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.Wrap
+        }
+
+        Text {
+          visible: phone.discoveryTruncated
+          Layout.fillWidth: true
+          text: qsTr("Showing up to 8 devices. Open Manage devices to see all devices.")
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.Wrap
+        }
+
         Repeater {
           model: phone.devices
   
@@ -295,7 +319,7 @@ Panel {
                 Layout.fillWidth: true
                 text: root.activePhoneId === modelData.id ? qsTr("Selected phone") : qsTr("Use this phone")
                 selected: root.activePhoneId === modelData.id
-                enabled: phone.canUseDevice(modelData.id)
+                enabled: phone.canSelectDevice(modelData.id)
                 focusable: true
                 Accessible.role: Accessible.Button
                 Accessible.name: qsTr("Use %1 for messages and notifications").arg(modelData.name)
@@ -330,7 +354,7 @@ Panel {
                   }
     
                   Text {
-                    text: Model.batteryText(modelData)
+                    text: phone.canUseDevice(modelData.id) ? Model.batteryText(modelData) : phone.connectionText(modelData)
                     textFormat: Text.PlainText
                     color: root.dim
                     font.family: root.fontFamily
@@ -360,8 +384,8 @@ Panel {
     
                 Button {
                   iconText: "󰅌"
-                  tooltipText: "Send clipboard"
-                  enabled: phone.canUseDevice(modelData.id)
+                  tooltipText: phone.canUseCapability(modelData.id, "clipboard") ? qsTr("Send clipboard") : phone.capabilityText(modelData.id, "clipboard")
+                  enabled: phone.canUseCapability(modelData.id, "clipboard")
                   foreground: root.foreground
                   fontFamily: root.fontFamily
                   bordered: true
@@ -370,8 +394,8 @@ Panel {
     
                 Button {
                   iconText: "󰌷"
-                  tooltipText: "Send text or link"
-                  enabled: phone.canUseDevice(modelData.id)
+                  tooltipText: phone.canUseCapability(modelData.id, "sharing") ? qsTr("Send text or link") : phone.capabilityText(modelData.id, "sharing")
+                  enabled: phone.canUseCapability(modelData.id, "sharing")
                   foreground: root.foreground
                   fontFamily: root.fontFamily
                   bordered: true
@@ -385,8 +409,8 @@ Panel {
     
                 Button {
                   iconText: "󰏲"
-                  tooltipText: "Ring phone"
-                  enabled: phone.canUseDevice(modelData.id)
+                  tooltipText: phone.canUseCapability(modelData.id, "ring") ? qsTr("Ring phone") : phone.capabilityText(modelData.id, "ring")
+                  enabled: phone.canUseCapability(modelData.id, "ring")
                   foreground: root.foreground
                   fontFamily: root.fontFamily
                   bordered: true
@@ -394,6 +418,50 @@ Panel {
                 }
               }
   
+              Button {
+                visible: root.activePhoneId === modelData.id
+                text: root.showCapabilities ? qsTr("Hide phone setup") : qsTr("Phone setup and capabilities")
+                focusable: true
+                Accessible.role: Accessible.Button
+                Accessible.name: text
+                onClicked: root.showCapabilities = !root.showCapabilities
+              }
+
+              ColumnLayout {
+                visible: root.activePhoneId === modelData.id && root.showCapabilities
+                Layout.fillWidth: true
+                spacing: Style.space(4)
+
+                Text {
+                  Layout.fillWidth: true
+                  text: phone.setupText(modelData)
+                  textFormat: Text.PlainText
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  wrapMode: Text.Wrap
+                }
+
+                Repeater {
+                  model: [{key: "messaging", label: qsTr("Messages")},
+                    {key: "sharing", label: qsTr("Text and links")},
+                    {key: "clipboard", label: qsTr("Clipboard")},
+                    {key: "notifications", label: qsTr("Notifications")},
+                    {key: "ring", label: qsTr("Ring")},
+                    {key: "media", label: qsTr("Media controls")}]
+                  Text {
+                    required property var modelData
+                    Layout.fillWidth: true
+                    text: modelData.label + ": " + phone.capabilityText(root.activePhoneId, modelData.key)
+                    textFormat: Text.PlainText
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    wrapMode: Text.Wrap
+                  }
+                }
+              }
+
             // Media controls for the phone's active player. The mprisremote
             // plugin emits no change signals, so this section advances from the
             // panel's regular polling (3s while open) rather than push events.
@@ -402,7 +470,7 @@ Panel {
             ColumnLayout {
               id: mediaSection
               visible: phone.mediaControls && Model.hasMedia(modelData)
-              enabled: phone.canUseDevice(modelData.id)
+              enabled: phone.canUseCapability(modelData.id, "media")
               Layout.fillWidth: true
               spacing: Style.space(4)
 
@@ -595,7 +663,7 @@ Panel {
             visible: phone.devices.length > 0
             iconText: "󰍩"
             text: "Messages"
-            enabled: root.activePhoneReady
+            enabled: root.messagesReady
             focusable: true
             Accessible.role: Accessible.Button
             Accessible.name: qsTr("Open messages for %1").arg(phone.selectedDeviceName)
@@ -603,6 +671,67 @@ Panel {
             fontFamily: root.fontFamily
             bordered: true
             onClicked: root.openMessages({})
+          }
+        }
+
+        Button {
+          text: root.showDiagnostics ? qsTr("Hide diagnostics") : qsTr("Connection diagnostics")
+          focusable: true
+          Accessible.role: Accessible.Button
+          Accessible.name: text
+          onClicked: {
+            root.showDiagnostics = !root.showDiagnostics
+            if (root.showDiagnostics) phone.loadDiagnostics()
+          }
+        }
+
+        ColumnLayout {
+          visible: root.showDiagnostics
+          Layout.fillWidth: true
+          spacing: Style.space(6)
+          Text {
+            Layout.fillWidth: true
+            text: phone.diagnosticsStatus
+            textFormat: Text.PlainText
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.Wrap
+          }
+          Controls.ScrollView {
+            id: diagnosticsScroll
+            Layout.fillWidth: true
+            Layout.preferredHeight: Style.space(160)
+            contentWidth: availableWidth
+            visible: phone.diagnosticsText !== ""
+            clip: true
+            Controls.TextArea {
+              width: diagnosticsScroll.availableWidth
+              text: phone.diagnosticsText
+              readOnly: true
+              selectByMouse: true
+              selectionColor: Color.accent
+              selectedTextColor: Color.background
+              background: Rectangle {
+                color: Color.background
+                border.color: root.dim
+                radius: Style.cornerRadius
+              }
+              textFormat: TextEdit.PlainText
+              wrapMode: TextEdit.WrapAnywhere
+              color: root.foreground
+              font.family: "monospace"
+              font.pixelSize: Style.font.caption
+              Accessible.name: qsTr("Redacted connection diagnostics")
+            }
+          }
+          Button {
+            text: qsTr("Refresh diagnostics")
+            enabled: !phone.diagnosticsBusy
+            focusable: true
+            Accessible.role: Accessible.Button
+            Accessible.name: text
+            onClicked: phone.loadDiagnostics()
           }
         }
 
@@ -629,7 +758,7 @@ Panel {
               placeholderText: "Text or https://…"
               foreground: root.foreground
               font.family: root.fontFamily
-              onAccepted: if (text.trim() !== "" && phone.canUseDevice(root.shareDeviceId)) {
+              onAccepted: if (text.trim() !== "" && phone.canUseCapability(root.shareDeviceId, "sharing")) {
                 phone.shareText(root.shareDeviceId, text.trim())
                 root.shareDeviceId = ""
               }
@@ -637,7 +766,7 @@ Panel {
   
             Button {
               text: "Send"
-              enabled: shareField.text.trim() !== "" && phone.canUseDevice(root.shareDeviceId)
+              enabled: shareField.text.trim() !== "" && phone.canUseCapability(root.shareDeviceId, "sharing")
               foreground: root.foreground
               fontFamily: root.fontFamily
               bordered: true
@@ -924,7 +1053,7 @@ Panel {
             placeholderText: "Reply"
             foreground: root.foreground
             font.family: root.fontFamily
-            onAccepted: if (text.trim() !== "" && phone.canUseDevice(root.notifReplyDeviceId)) {
+            onAccepted: if (text.trim() !== "" && phone.canUseCapability(root.notifReplyDeviceId, "notifications")) {
               phone.replyToNotification(root.notifReplyDeviceId, root.notifReplyId, text.trim())
               root.notifReplyId = ""
             }
@@ -932,7 +1061,7 @@ Panel {
 
           Button {
             text: "Send"
-            enabled: notifReplyField.text.trim() !== "" && phone.canUseDevice(root.notifReplyDeviceId)
+            enabled: notifReplyField.text.trim() !== "" && phone.canUseCapability(root.notifReplyDeviceId, "notifications")
             foreground: root.foreground
             fontFamily: root.fontFamily
             bordered: true

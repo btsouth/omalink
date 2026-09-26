@@ -8,6 +8,7 @@ account or cloud relay.
 
 ## Features
 
+- Paired, offline and unpaired devices with task availability and connection setup
 - Connected phone, battery, charging state, network type, and signal strength
 - SMS/MMS/RCS and authenticator notifications with dismissal on the phone
 - Notification sources you can tune, and popups you can turn off while keeping
@@ -59,11 +60,44 @@ omarchy pkg add kdeconnect jq
 ```
 
 Open OmaLink from the bar, choose **Open pairing**, and approve the computer in
-KDE Connect on your phone. Grant the Android permissions needed for messaging,
-contacts, notifications, clipboard access, and device status.
+KDE Connect on your phone. Enable the plugins you want in **Manage devices** and
+on the phone. For messaging, follow KDE Connect's SMS and contacts permission
+prompts. Notification access is a separate Android setting. Clipboard behavior
+can require a phone-side gesture; see the [KDE Connect guide](https://userbase.kde.org/KDEConnect).
 
 Both devices must be able to reach one another, normally on the same local
 network. OmaLink never installs packages itself.
+
+## Connection setup and diagnostics
+
+The panel lists up to eight known KDE Connect devices, including paired offline
+phones and discovered devices awaiting pairing. Selecting an offline phone keeps
+that destination selected. It does not send actions to another phone. Pair new
+devices through **Manage devices**; OmaLink does not change packages, firewalls,
+network settings or KDE Connect plugin settings.
+
+The selected phone shows which tasks its KDE Connect plugins support, which are
+disabled, and which cannot be confirmed. Available means the backend reports a
+loaded, enabled plugin for a paired, reachable device. It does not prove phone
+permissions or successful delivery. Failed or outdated status pauses actions.
+
+Android messaging remains the supported messaging path. An iPhone with KDE
+Connect can expose a different set of tasks; keep its app open while connecting.
+The [upstream iOS limitations](https://github.com/KDE/kdeconnect-ios/blob/master/README.md)
+explain its background behavior. BlueFerry and Mac messaging integration remain
+planned work.
+
+**Connection diagnostics** shows a selectable report with backend version,
+pairing/reachability and plugin state. It excludes phone names and IDs, addresses,
+contacts, message bodies, notification text, media titles, file paths and tokens.
+To save the same bounded report from a checkout:
+
+```sh
+bin/omalink diagnostics > omalink-diagnostics.json
+```
+
+Diagnostics inspect metadata only. Missing phone permissions remain unknown;
+they are not inferred from absent data. Reports do not contain KDE Connect logs.
 
 ## Remove
 

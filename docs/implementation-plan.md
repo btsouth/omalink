@@ -24,7 +24,9 @@ than replacing the application with a framework first.
 - Preserve upstream security limits unless a reviewed requirement and replacement
   bound justify changing them. Never remove bounds to obtain complete history.
 - Use small commits for an independently understandable behavior change. Open
-  draft PRs while code, hardware validation, title, or description is unfinished.
+  draft PRs while code, automated validation, title, or description is unfinished.
+  Unreleased source may merge after review; physical acceptance stays an explicit
+  release gate until it has actually been performed.
 
 Dependency order:
 
@@ -120,7 +122,7 @@ invalidate old proxies, pending reads and cached capability evidence.
 - [ ] Update marketplace evidence only when the submitted revision actually
   includes the fixes. Marketplace approval and a passing local test are separate.
 
-Audit candidate: `7d2e99a`, draft [PR #4](https://github.com/btsouth/omalink/pull/4).
+Audit candidate: `7d2e99a`, merged [PR #4](https://github.com/btsouth/omalink/pull/4).
 Local automated checks passed; real-phone acceptance and marketplace re-review
 remain open. No installation or real-desktop mutation was performed.
 
@@ -204,22 +206,36 @@ Physical delivery, screen-reader acceptance and complete translation remain open
 
 ### PR 3: capability-aware setup and diagnostics
 
-- [ ] Discover KDE backend/version and supported plugin interfaces. Distinguish
+Implemented and locally validated. PRs #4, #5 and #6 merged into `main` at `523e200`.
+The automated and isolated UI evidence above applies to those source changes;
+physical acceptance and marketplace re-review remain open.
+
+- [x] Discover KDE backend/version and supported plugin interfaces. Distinguish
   capability support from current readiness and user permission.
-- [ ] Enumerate paired devices as well as reachable ones, replacing the retained
+- [x] Enumerate paired devices as well as reachable ones, replacing the retained
   selection placeholder with actual pairing/reachability evidence. Preserve null
   battery/network values and distinguish an unpaired device from an offline one.
-- [ ] Provide setup steps for install, pair, reachability and the desired task.
+- [x] Provide setup steps for install, pair, reachability and the desired task.
   Name Android permissions accurately; missing data alone means unknown.
-- [ ] Use KDE pairing APIs or an explicit native-manager handoff. Never mutate
+- [x] Use KDE pairing APIs or an explicit native-manager handoff. Never mutate
   packages, firewall, network, Bluetooth or another app's settings during a read.
-- [ ] Add per-capability unavailable explanations, freshness time and retry.
-- [ ] Add a redacted diagnostics export containing versions, state and bounded
+- [x] Add per-capability unavailable explanations, freshness time and retry.
+- [x] Add a redacted diagnostics export containing versions, state and bounded
   error codes, excluding bodies, contact lists, tokens and credentials.
 
 Acceptance: clean install, daemon absent, backend crash, disabled plugin,
 permission denied/unknown, paired offline device, usable messaging with absent
 media capability, and user completing first share without developer assistance.
+
+Automated evidence: model and metadata contracts, failure/timeout/size boundaries,
+owner restart, diagnostics redaction, messaging preflight, CLI and adversarial
+checks pass. Actual Panel/Service tests cover capability changes during reads,
+unknown pairing/reachability, offline selection, stale status, and blocked actions.
+Send/lifecycle regression suites and plugin validation pass in omabox. Dark
+1920x1080 and light 1366x768 setup views were inspected. Real-phone permissions,
+first-use success and screen-reader acceptance remain open. The legacy SMS CLI
+has a narrow backend-restart race after preflight; no failed dispatch is retried
+or represented as definitely unsent.
 
 ## Phase 2: transfers, handoff and the provider boundary
 

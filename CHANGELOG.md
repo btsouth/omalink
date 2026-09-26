@@ -2,6 +2,10 @@
 
 ## 0.3.0 - Unreleased
 
+- Show known paired, offline and unpaired devices with capability-aware setup.
+  Disable unavailable tasks, keep null status values unknown, and show freshness.
+- Add bounded, redacted connection diagnostics without collecting phone content.
+
 - Show submitting, accepted, matching-history, unconfirmed and not-submitted
   message states. Bound reconciliation, retain uncertain text for editing, and
   never retry a send automatically or label command acceptance as delivery.
