@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# Explicit local files only. KDE Connect owns transfer progress and notifications.
+set -euo pipefail
+umask 077
+# Bounds below count filesystem bytes, not locale-dependent character counts.
+export LC_ALL=C
+
+count=0
+result() {
+  local ok="$1" state="$2" code="$3" message="$4" exit_code="$5"
+  jq -cn --argjson ok "$ok" --arg state "$state" --arg code "$code" \
+    --arg statusText "$message" --argjson count "$count" \
+    '{ok:$ok,state:$state,code:$code,count:$count,statusText:$statusText}'
+  exit "$exit_code"
+}
+
+if ! command -v jq >/dev/null; then
+  printf '%s\n' '{"ok":false,"state":"failed","code":"dependency","count":0,"statusText":"Install jq to share files"}'
+  exit 1
+fi
+for dependency in busctl timeout stat head; do
+  command -v "$dependency" >/dev/null || result false failed dependency "A required file sharing tool is missing" 1
+done
+
+device_id="${1:-}"
+[[ $device_id =~ ^[a-zA-Z0-9]{1,128}$ ]] || result false failed invalid_device "Choose a valid phone" 2
+shift
+count=$#
+(( count >= 1 && count <= 32 )) || result false failed file_count "Choose between 1 and 32 files" 2
+
+# Validate the entire batch before contacting the backend. Files may belong to
+# someone else if the user can read them. Symbolic links to regular files are
+# allowed; this is an explicit picker/CLI request, never a phone-supplied path.
+# KDE opens the paths asynchronously, so files can still change after validation.
+total=0
+urls=()
+declare -A seen=()
+for path in "$@"; do
+  [[ $path == /* && ${#path} -le 4096 ]] || result false failed invalid_path "Choose local files using absolute paths" 2
+  [[ -f $path && -r $path ]] || result false failed unreadable_file "Every selected item must be a readable regular file" 2
+  # jq replaces invalid UTF-8. Refuse those paths instead of sending another
+  # file accidentally. The sentinel preserves trailing newlines in file names.
+  [[ $(jq -nrj --arg path "$path" '$path, "."') == "$path." ]] || result false failed invalid_path "A selected file name is not valid UTF-8" 2
+  [[ -z ${seen[$path]+present} ]] || result false failed duplicate_file "A file was selected more than once" 2
+  seen[$path]=1
+  size="$(stat --dereference --format=%s -- "$path" 2>/dev/null)" || result false failed unreadable_file "A selected file is no longer readable" 2
+  [[ $size =~ ^[0-9]{1,15}$ ]] || result false failed invalid_size "Could not check a selected file's size" 2
+  (( size <= 8589934592 && total <= 8589934592 - size )) || result false failed size_limit "Choose no more than 8 GiB of files per request" 2
+  total=$((total + size))
+  urls+=("$(jq -nr --arg path "$path" '"file://" + ($path | @uri | gsub("%2F"; "/"))')")
+done
+
+# Bound both elapsed time and captured output. Preserve nonzero busctl status;
+# partial output and timeout must never be interpreted as a valid response.
+read_bus() {
+  timeout --kill-after=1s 5s busctl --user --auto-start=no --json=short "$@" 2>/dev/null | head -c 65536
+}
+owner_for_service() {
+  local reply
+  reply="$(read_bus call -- org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus GetNameOwner s org.kde.kdeconnect)" || return 1
+  jq -er 'select(.type == "s" and (.data | type == "array" and length == 1)) | .data[0] | select(type == "string" and test("^:[0-9]+\\.[0-9]+$"))' <<<"$reply"
+}
+owner="$(owner_for_service)" || result false failed backend_unavailable "KDE Connect is unavailable; open phone setup" 1
+device_path="/modules/kdeconnect/devices/$device_id"
+for property in isPaired isReachable; do
+  reply="$(read_bus get-property -- "$owner" "$device_path" org.kde.kdeconnect.device "$property")" || result false failed status_unavailable "Could not check the phone connection" 1
+  jq -e '(.type == "b") and (.data | type == "boolean")' >/dev/null <<<"$reply" || result false failed status_unavailable "Could not check the phone connection" 1
+  if ! jq -e '.data == true' >/dev/null <<<"$reply"; then
+    if [[ $property == isPaired ]]; then
+      result false failed unpaired "Pair this phone before sharing files" 1
+    fi
+    result false failed offline "Connect this phone before sharing files" 1
+  fi
+done
+reply="$(read_bus call -- "$owner" "$device_path" org.kde.kdeconnect.device hasPlugin s kdeconnect_share)" || result false failed share_unavailable "Could not check file sharing support" 1
+jq -e '.type == "b" and .data == [true]' >/dev/null <<<"$reply" || result false failed share_unavailable "Enable file sharing in KDE Connect on both devices" 1
+current_owner="$(owner_for_service)" || result false failed backend_changed "KDE Connect stopped before the request was submitted" 1
+[[ $current_owner == "$owner" ]] || result false failed backend_changed "KDE Connect restarted; refresh before sharing files" 1
+
+# Bind dispatch to the checked unique owner. One batch call, never a retry.
+# v26.08.1 shareUrls returns void and loops over files. Even exit 0 does not
+# confirm delivery; nonzero after dispatch cannot disprove a partial transfer.
+if timeout --kill-after=1s 10s busctl --user --auto-start=no call -- \
+  "$owner" "$device_path/share" org.kde.kdeconnect.device.share shareUrls as \
+  "$count" "${urls[@]}" >/dev/null 2>&1; then
+  result true accepted accepted "File request accepted by KDE Connect; delivery is not verified" 0
+fi
+result false unconfirmed dispatch_unconfirmed "File request outcome is unknown; check the phone before sending again" 1
