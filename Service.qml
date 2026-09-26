@@ -10,11 +10,22 @@ Item {
   property bool panelOpen: false
   property bool installed: false
   property bool statusFailed: false
+  property bool statusReady: false
   property bool refreshing: false
   property var devices: []
-  property string statusText: "Checking…"
+  readonly property string selectedDeviceId: Model.selectedDeviceId(devices, String(setting("selectedDeviceId", "")))
+  readonly property var selectedDevice: Model.deviceById(devices, selectedDeviceId)
+  readonly property string selectedDeviceName: selectedDevice ? selectedDevice.name
+    : String(setting("selectedDeviceName", "Selected phone")).slice(0, 256)
+  readonly property bool selectedDeviceReady: canUseDevice(selectedDeviceId)
+  readonly property string statusText: !statusReady ? qsTr("Checking…")
+    : statusFailed ? qsTr("Could not refresh phone status. Actions paused.")
+    : !installed ? qsTr("KDE Connect is not installed")
+    : selectedDeviceId !== "" ? selectedDeviceName + (selectedDevice ? "" : " · " + qsTr("Offline or unavailable"))
+    : devices.length > 1 ? qsTr("Choose a phone below") : qsTr("No phone connected")
   property string actionStatus: ""
   property string actionSuccess: ""
+  signal selectionSuggested(string deviceId, string deviceName)
 
   readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 15, 5, 300)
   readonly property var notifySources: settings && settings["notifyApps"] !== undefined && settings["notifyApps"] !== null
@@ -37,7 +48,18 @@ Item {
     refresh()
   }
 
-  readonly property bool connected: devices.length > 0
+  readonly property bool connected: installed && !statusFailed && devices.length > 0
+
+  function canUseDevice(deviceId) {
+    return installed && !statusFailed && Model.deviceById(devices, deviceId) !== null
+  }
+
+  function actionTarget(deviceId) {
+    if (canUseDevice(deviceId)) return true
+    actionStatus = qsTr("Phone unavailable. Refresh its connection before trying again.")
+    clearActionStatus.restart()
+    return false
+  }
 
   function setting(name, fallback) {
     var value = settings ? settings[name] : undefined
@@ -59,57 +81,60 @@ Item {
 
   function applyStatus(raw) {
     var status = Model.parseStatus(raw)
+    statusReady = true
     statusFailed = String(raw || "").trim() === "" || status.ok !== true
-    if (statusFailed) { statusText = "Could not refresh phone status"; return }
+    if (statusFailed) return
     installed = status.installed === true
     devices = status.devices || []
-    statusText = String(status.statusText || Model.deviceSummary(devices))
+    if (selectedDevice && (String(setting("selectedDeviceId", "")) !== selectedDeviceId
+        || String(setting("selectedDeviceName", "")) !== selectedDevice.name))
+      selectionSuggested(selectedDeviceId, selectedDevice.name)
   }
 
   function ring(deviceId) {
-    if (!deviceId || actionProcess.running) return
+    if (actionProcess.running || !actionTarget(deviceId)) return
     actionStatus = "Ringing phone…"
-    actionSuccess = "Phone is ringing"
+    actionSuccess = qsTr("Ring requested for %1").arg(Model.deviceById(devices, deviceId).name)
     actionProcess.command = [helperPath, "ring", String(deviceId)]
     actionProcess.running = true
   }
 
   function sendClipboard(deviceId) {
-    if (!deviceId || actionProcess.running) return
+    if (actionProcess.running || !actionTarget(deviceId)) return
     actionStatus = "Sending clipboard…"
-    actionSuccess = "Clipboard sent"
+    actionSuccess = qsTr("Clipboard request sent to %1").arg(Model.deviceById(devices, deviceId).name)
     actionProcess.command = [helperPath, "clipboard", String(deviceId)]
     actionProcess.running = true
   }
 
   function shareText(deviceId, value) {
-    if (!deviceId || !value || actionProcess.running) return
+    if (!value || actionProcess.running || !actionTarget(deviceId)) return
     actionStatus = "Sending to phone…"
-    actionSuccess = "Sent to phone"
+    actionSuccess = qsTr("Share request sent to %1").arg(Model.deviceById(devices, deviceId).name)
     actionProcess.command = [helperPath, "share", String(deviceId), String(value)]
     actionProcess.running = true
   }
 
   function dismissNotification(deviceId, notificationId) {
-    if (!deviceId || !notificationId || actionProcess.running) return
+    if (!notificationId || actionProcess.running || !actionTarget(deviceId)) return
     actionStatus = "Dismissing notification…"
-    actionSuccess = "Notification dismissed"
+    actionSuccess = qsTr("Dismissal requested for %1").arg(Model.deviceById(devices, deviceId).name)
     actionProcess.command = [helperPath, "dismiss", String(deviceId), String(notificationId)]
     actionProcess.running = true
   }
 
   function dismissAllNotifications(deviceId) {
-    if (!deviceId || actionProcess.running) return
+    if (actionProcess.running || !actionTarget(deviceId)) return
     actionStatus = "Clearing notifications…"
-    actionSuccess = "Notifications cleared"
+    actionSuccess = qsTr("Notification clearing requested for %1").arg(Model.deviceById(devices, deviceId).name)
     actionProcess.command = withNotify([helperPath, "dismiss-all", String(deviceId)])
     actionProcess.running = true
   }
 
   function replyToNotification(deviceId, replyId, message) {
-    if (!deviceId || !replyId || !message || actionProcess.running) return
+    if (!replyId || !message || actionProcess.running || !actionTarget(deviceId)) return
     actionStatus = "Sending reply…"
-    actionSuccess = "Reply sent"
+    actionSuccess = qsTr("Reply request sent to %1").arg(Model.deviceById(devices, deviceId).name)
     actionProcess.command = [helperPath, "notify-reply", String(deviceId), String(replyId), String(message)]
     actionProcess.running = true
   }
@@ -121,19 +146,19 @@ Item {
   // Media actions are fire-and-forget: the panel refreshes its media state on
   // the process exit and from its regular polling, so no status text needed.
   function mediaAction(deviceId, action) {
-    if (!deviceId || !action || mediaProcess.running) return
+    if (!action || mediaProcess.running || !actionTarget(deviceId)) return
     mediaProcess.command = [helperPath, "media-action", String(deviceId), String(action)]
     mediaProcess.running = true
   }
 
   function mediaVolume(deviceId, volume) {
-    if (!deviceId || mediaProcess.running) return
+    if (mediaProcess.running || !actionTarget(deviceId)) return
     mediaProcess.command = [helperPath, "media-volume", String(deviceId), String(Math.round(Number(volume) || 0))]
     mediaProcess.running = true
   }
 
   function mediaSeek(deviceId, position) {
-    if (!deviceId || mediaProcess.running) return
+    if (mediaProcess.running || !actionTarget(deviceId)) return
     mediaProcess.command = [helperPath, "media-seek", String(deviceId), String(Math.round(Number(position) || 0))]
     mediaProcess.running = true
   }
@@ -179,8 +204,8 @@ Item {
     onExited: function(exitCode) {
       root.refreshing = false
       if (exitCode !== 0) {
+        root.statusReady = true
         root.statusFailed = true
-        root.statusText = "Could not refresh phone status"
       }
     }
   }

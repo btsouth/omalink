@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0 - Unreleased
+
+- Remember the selected phone for messages and notifications. Discovery order
+  and disconnects no longer switch those workflows to another phone.
+- Keep the selected phone's name visible while unavailable, pause actions after
+  failed status reads, and distinguish failed discovery from an empty list.
+- Clear phone-specific panel drafts on selection changes and reject late unread
+  results, including switching away and back to the same phone.
+- Add the phased implementation plan and isolated multi-phone regression tests.
+
 ## 0.2.3 - Unreleased
 
 - Enforce a hard 16 MiB capture limit while requests are pending. Kill and reap

@@ -13,8 +13,17 @@ function parseStatus(raw) {
 
   try {
     var parsed = JSON.parse(text)
-    if (!parsed || typeof parsed !== "object") return defaultStatus()
-    parsed.devices = Array.isArray(parsed.devices) ? parsed.devices : []
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== "object"
+        || typeof parsed.ok !== "boolean" || typeof parsed.installed !== "boolean"
+        || !Array.isArray(parsed.devices)) throw new Error("Invalid status")
+    var ids = []
+    parsed.devices = parsed.devices.filter(function(device) {
+      if (!device || !validDeviceId(device.id) || typeof device.name !== "string"
+          || ids.indexOf(device.id) !== -1 || ids.length >= 8) return false
+      ids.push(device.id)
+      device.name = device.name.slice(0, 256)
+      return true
+    })
     return parsed
   } catch (error) {
     var failed = defaultStatus()
@@ -22,6 +31,25 @@ function parseStatus(raw) {
     failed.statusText = "Could not read phone status"
     return failed
   }
+}
+
+function validDeviceId(id) {
+  return typeof id === "string" && /^[A-Za-z0-9]{1,128}$/.test(id)
+}
+
+function deviceById(devices, id) {
+  if (!validDeviceId(id) || !Array.isArray(devices)) return null
+  for (var i = 0; i < devices.length; i++)
+    if (devices[i] && devices[i].id === id) return devices[i]
+  return null
+}
+
+function selectedDeviceId(devices, preferredId) {
+  // A missing selected phone remains selected. Never choose another phone just
+  // because it became the only reachable one or discovery reordered the list.
+  if (validDeviceId(preferredId)) return preferredId
+  return Array.isArray(devices) && devices.length === 1 && validDeviceId(devices[0].id)
+    ? devices[0].id : ""
 }
 
 function deviceSummary(devices) {
@@ -429,6 +457,9 @@ function relativeTime(timestamp, now) {
 
 if (typeof module !== "undefined") {
   module.exports = {
+    validDeviceId: validDeviceId,
+    deviceById: deviceById,
+    selectedDeviceId: selectedDeviceId,
     defaultStatus: defaultStatus,
     parseStatus: parseStatus,
     deviceSummary: deviceSummary,
