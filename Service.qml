@@ -35,6 +35,8 @@ Item {
     : selectedDeviceId !== "" ? selectedDeviceName + (selectedDeviceReady ? "" : " · " + connectionText(selectedDevice))
     : devices.length > 1 ? qsTr("Choose a phone below") : qsTr("No phone connected")
   property string actionStatus: ""
+  property string privateDestinationName: ""
+  readonly property bool actionBusy: actionProcess.running || privateAction.running
   property string actionSuccess: ""
   signal selectionSuggested(string deviceId, string deviceName)
 
@@ -152,7 +154,7 @@ Item {
   }
 
   function ring(deviceId) {
-    if (actionProcess.running || !actionTarget(deviceId, "ring")) return
+    if (actionBusy || !actionTarget(deviceId, "ring")) return
     actionStatus = "Ringing phone…"
     actionSuccess = qsTr("Ring requested for %1").arg(Model.deviceById(devices, deviceId).name)
     actionProcess.command = [helperPath, "ring", String(deviceId)]
@@ -160,7 +162,7 @@ Item {
   }
 
   function sendClipboard(deviceId) {
-    if (actionProcess.running || !actionTarget(deviceId, "clipboard")) return
+    if (actionBusy || !actionTarget(deviceId, "clipboard")) return
     actionStatus = "Sending clipboard…"
     actionSuccess = qsTr("Clipboard request sent to %1").arg(Model.deviceById(devices, deviceId).name)
     actionProcess.command = [helperPath, "clipboard", String(deviceId)]
@@ -168,15 +170,15 @@ Item {
   }
 
   function shareText(deviceId, value) {
-    if (!value || actionProcess.running || !actionTarget(deviceId, "sharing")) return
+    if (!value || actionBusy || !actionTarget(deviceId, "sharing")) return false
     actionStatus = "Sending to phone…"
-    actionSuccess = qsTr("Share request sent to %1").arg(Model.deviceById(devices, deviceId).name)
-    actionProcess.command = [helperPath, "share", String(deviceId), String(value)]
-    actionProcess.running = true
+    privateDestinationName = Model.deviceById(devices, deviceId).name
+    clearActionStatus.stop()
+    return privateAction.start({version:1, operation:"share", deviceId:String(deviceId), body:String(value)})
   }
 
   function dismissNotification(deviceId, notificationId) {
-    if (!notificationId || actionProcess.running || !actionTarget(deviceId, "notifications")) return
+    if (!notificationId || actionBusy || !actionTarget(deviceId, "notifications")) return
     actionStatus = "Dismissing notification…"
     actionSuccess = qsTr("Dismissal requested for %1").arg(Model.deviceById(devices, deviceId).name)
     actionProcess.command = [helperPath, "dismiss", String(deviceId), String(notificationId)]
@@ -184,7 +186,7 @@ Item {
   }
 
   function dismissAllNotifications(deviceId) {
-    if (actionProcess.running || !actionTarget(deviceId, "notifications")) return
+    if (actionBusy || !actionTarget(deviceId, "notifications")) return
     actionStatus = "Clearing notifications…"
     actionSuccess = qsTr("Notification clearing requested for %1").arg(Model.deviceById(devices, deviceId).name)
     actionProcess.command = withNotify([helperPath, "dismiss-all", String(deviceId)])
@@ -192,11 +194,11 @@ Item {
   }
 
   function replyToNotification(deviceId, replyId, message) {
-    if (!replyId || !message || actionProcess.running || !actionTarget(deviceId, "notifications")) return
+    if (!replyId || !message || actionBusy || !actionTarget(deviceId, "notifications")) return false
     actionStatus = "Sending reply…"
-    actionSuccess = qsTr("Reply request sent to %1").arg(Model.deviceById(devices, deviceId).name)
-    actionProcess.command = [helperPath, "notify-reply", String(deviceId), String(replyId), String(message)]
-    actionProcess.running = true
+    privateDestinationName = Model.deviceById(devices, deviceId).name
+    clearActionStatus.stop()
+    return privateAction.start({version:1, operation:"notify-reply", deviceId:String(deviceId), replyId:String(replyId), body:String(message)})
   }
 
   function openPairing() {
@@ -294,6 +296,16 @@ Item {
         root.statusReady = true
         root.statusFailed = true
       }
+    }
+  }
+
+  PrivateRequest {
+    id: privateAction
+    helperPath: root.helperPath
+    onFinished: function(outcome) {
+      root.actionStatus = root.privateDestinationName + ": " + outcome.text
+      if (outcome.state === "accepted") clearActionStatus.restart()
+      root.refresh()
     }
   }
 

@@ -781,21 +781,19 @@ Panel {
               placeholderText: "Text or https://…"
               foreground: root.foreground
               font.family: root.fontFamily
-              onAccepted: if (text.trim() !== "" && phone.canUseCapability(root.shareDeviceId, "sharing")) {
-                phone.shareText(root.shareDeviceId, text.trim())
-                root.shareDeviceId = ""
+              onAccepted: if (text.trim() !== "" && !phone.actionBusy && phone.canUseCapability(root.shareDeviceId, "sharing")) {
+                if (phone.shareText(root.shareDeviceId, text)) root.shareDeviceId = ""
               }
             }
   
             Button {
               text: "Send"
-              enabled: shareField.text.trim() !== "" && phone.canUseCapability(root.shareDeviceId, "sharing")
+              enabled: shareField.text.trim() !== "" && !phone.actionBusy && phone.canUseCapability(root.shareDeviceId, "sharing")
               foreground: root.foreground
               fontFamily: root.fontFamily
               bordered: true
               onClicked: {
-                phone.shareText(root.shareDeviceId, shareField.text.trim())
-                root.shareDeviceId = ""
+                if (phone.shareText(root.shareDeviceId, shareField.text)) root.shareDeviceId = ""
               }
             }
   
@@ -1076,21 +1074,19 @@ Panel {
             placeholderText: "Reply"
             foreground: root.foreground
             font.family: root.fontFamily
-            onAccepted: if (text.trim() !== "" && phone.canUseCapability(root.notifReplyDeviceId, "notifications")) {
-              phone.replyToNotification(root.notifReplyDeviceId, root.notifReplyId, text.trim())
-              root.notifReplyId = ""
+            onAccepted: if (text.trim() !== "" && !phone.actionBusy && phone.canUseCapability(root.notifReplyDeviceId, "notifications")) {
+              if (phone.replyToNotification(root.notifReplyDeviceId, root.notifReplyId, text)) root.notifReplyId = ""
             }
           }
 
           Button {
             text: "Send"
-            enabled: notifReplyField.text.trim() !== "" && phone.canUseCapability(root.notifReplyDeviceId, "notifications")
+            enabled: notifReplyField.text.trim() !== "" && !phone.actionBusy && phone.canUseCapability(root.notifReplyDeviceId, "notifications")
             foreground: root.foreground
             fontFamily: root.fontFamily
             bordered: true
             onClicked: {
-              phone.replyToNotification(root.notifReplyDeviceId, root.notifReplyId, notifReplyField.text.trim())
-              root.notifReplyId = ""
+              if (phone.replyToNotification(root.notifReplyDeviceId, root.notifReplyId, notifReplyField.text)) root.notifReplyId = ""
             }
           }
 

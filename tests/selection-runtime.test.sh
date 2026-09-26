@@ -13,6 +13,7 @@ cat >"$work/bin/omalink" <<'EOF'
 #!/bin/bash
 while [[ $1 == --* ]]; do shift 2; done
 case $1 in
+  text-stdin) exec python3 "$(dirname "$0")/private.py" ;;
   status) printf '{"schemaVersion":1,"ok":true,"installed":true,"observedAt":1,"discoveryTruncated":false,"backend":{"name":"kdeconnect","version":"26.08.1","versionSource":"kdeconnect-cli","available":true},"devices":[{"id":"abc123","name":"Pixel","paired":true,"reachable":true},{"id":"def456","name":"Galaxy","paired":true,"reachable":true}]}\n' ;;
   diagnostics) printf '{"schemaVersion":1,"ok":true,"installed":true,"observedAt":1,"discoveryTruncated":false,"backend":{"name":"kdeconnect","version":"26.08.1","versionSource":"kdeconnect-cli","available":true},"devices":[{"label":"device-1","id":"PRIVATE","name":"PRIVATE","paired":true,"reachable":true,"type":"phone","capabilities":{}}]}\n' ;;
   watch) sleep 30 ;;
@@ -22,10 +23,24 @@ case $1 in
   *) printf "unexpected:%s\n" "$1" >>"$OMALINK_SELECTION_LOG" ;;
 esac
 EOF
+cat >"$work/bin/private.py" <<'PY_HELPER'
+import json
+import os
+import sys
+import time
+request = json.load(sys.stdin)
+assert sys.argv[1:] == []
+assert request["deviceId"] == "abc123"
+assert request["body"] == "  exact 😀  "
+with open(os.environ["OMALINK_SELECTION_LOG"], "a") as stream:
+    stream.write(request["operation"] + "\n")
+time.sleep(0.15)
+print(json.dumps({"version":1,"ok":True,"state":"accepted","code":"accepted"}))
+PY_HELPER
 chmod +x "$work/bin/omalink"
 cp "$project_dir/tests/selection-runtime.qml" "$work/shell.qml"
 timeout --kill-after=2s 20s qs -p "$work" >"$work/log" 2>&1 || { cat "$work/log"; exit 1; }
 cat "$work/log"
 grep -q 'omalink selection runtime tests passed' "$work/log"
 if grep -Eq 'ReferenceError|TypeError|SyntaxError|FAIL:' "$work/log"; then exit 1; fi
-[[ $(cat "$work/actions") == def456 ]]
+[[ $(cat "$work/actions") == $'def456\nshare\nnotify-reply' ]]

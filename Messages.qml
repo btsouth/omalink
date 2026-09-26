@@ -9,6 +9,7 @@ import qs.Commons
 import qs.Ui
 import "Model.js" as Model
 import "SendState.js" as SendState
+import "PrivateText.js" as PrivateText
 
 Item {
   id: root
@@ -82,6 +83,8 @@ Item {
   function close() {
     opened = false
     generation++
+    newMessageProcess.forgetPayload()
+    replyProcess.forgetPayload()
     conversationProcess.running = false
     contactProcess.running = false
     threadProcess.running = false
@@ -241,16 +244,20 @@ Item {
     if (!valid) operation.state = "failed"
     updateSendOperations(retained.concat([operation]))
     if (!valid) {
-      error = "Check the phone connection, recipient and message length (maximum 8192 characters)."
+      error = "Check the phone connection, recipient and message length (maximum 8192 UTF-8 bytes)."
       return null
     }
     return operation
   }
 
-  function finishSend(operationId, exitCode) {
+  function finishSend(operationId, outcome) {
+    var exitCode = outcome.state === "accepted" ? 0 : 1
     var operation = sendOperations.find(function(item) { return item.id === operationId })
     if (!operation) return
-    replaceSend(SendState.finish(operation, exitCode, Date.now(), sendConfirmationTimeoutMs))
+    var finished = SendState.finish(operation, exitCode, Date.now(), sendConfirmationTimeoutMs)
+    if (outcome.state === "not-submitted") finished.state = "failed"
+    replaceSend(finished)
+    if (outcome.state !== "accepted") error = outcome.text
     if (exitCode === 0) reconcileSends.start()
   }
 
@@ -297,21 +304,20 @@ Item {
   function sendNewMessage() {
     var destination = recipientNumber !== "" ? recipientNumber : recipientField.text.trim()
     var message = composeMessage.text
-    if (destination === "" || message.trim() === "" || sending || !opened) return
+    if (destination === "" || message.trim() === "" || sending || newMessageProcess.running || replyProcess.running || !opened) return
     var conversation = SendState.exactConversation(historyConversations, destination)
       || {threadId: null, addresses: [destination], names: [recipientNumber !== "" ? recipientQuery : destination]}
     var valid = /^[A-Za-z0-9]{1,128}$/.test(deviceId)
       && /^[+0-9().\s-]+$/.test(destination) && destination.replace(/[^0-9]/g, "").length >= 3
-      && message.length <= 8192
+      && PrivateText.byteLength(message) <= 8192 && message.indexOf("\u0000") === -1
     var operation = prepareSend(conversation, destination, message, valid)
     if (!operation) return
     sending = true
     pendingNewBody = message
     error = ""
     newMessageProcess.operationId = operation.id
-    newMessageProcess.command = [helperPath, "sms", deviceId, destination, message]
     newMessageProcess.generation = generation
-    newMessageProcess.running = true
+    newMessageProcess.start({version:1, operation:"sms", deviceId:deviceId, destination:destination, body:message})
   }
 
   // Every route that opens a phone attachment outside OmaLink goes through the
@@ -363,10 +369,10 @@ Item {
 
   function sendReply() {
     var message = replyField.text
-    if (!selectedConversation || message.trim() === "" || sending || !opened) return
+    if (!selectedConversation || message.trim() === "" || sending || newMessageProcess.running || replyProcess.running || !opened) return
     var threadId = selectedConversation.threadId
     var valid = /^[A-Za-z0-9]{1,128}$/.test(deviceId) && threadId !== null
-      && /^[0-9]+$/.test(String(threadId)) && message.length <= 8192
+      && /^[0-9]+$/.test(String(threadId)) && PrivateText.byteLength(message) <= 8192 && message.indexOf("\u0000") === -1
     var operation = prepareSend(selectedConversation, "", message, valid)
     if (!operation) return
     sending = true
@@ -374,9 +380,8 @@ Item {
     pendingThreadId = String(threadId)
     error = ""
     replyProcess.operationId = operation.id
-    replyProcess.command = [helperPath, "reply", deviceId, String(threadId), message]
     replyProcess.generation = generation
-    replyProcess.running = true
+    replyProcess.start({version:1, operation:"reply", deviceId:deviceId, threadId:String(threadId), body:message})
   }
 
   Timer {
@@ -430,16 +435,17 @@ Item {
     onExited: if (root.opened && !current) Qt.callLater(root.refreshContacts)
   }
 
-  Process {
+  PrivateRequest {
     id: newMessageProcess
+    helperPath: root.helperPath
     property int generation: -1
     property string operationId: ""
     readonly property bool current: root.opened && generation === root.generation
-    onExited: function(exitCode) {
+    onFinished: function(outcome) {
       root.sending = false
       if (!current) { root.pendingNewBody = ""; return }
-      root.finishSend(operationId, exitCode)
-      if (exitCode === 0 && root.composing && composeMessage.text === root.pendingNewBody) {
+      root.finishSend(operationId, outcome)
+      if (outcome.state === "accepted" && root.composing && composeMessage.text === root.pendingNewBody) {
         root.composing = false
         root.recipientQuery = ""
         root.recipientNumber = ""
@@ -497,16 +503,17 @@ Item {
     }
   }
 
-  Process {
+  PrivateRequest {
     id: replyProcess
+    helperPath: root.helperPath
     property int generation: -1
     property string operationId: ""
     readonly property bool current: root.opened && generation === root.generation
-    onExited: function(exitCode) {
+    onFinished: function(outcome) {
       root.sending = false
       if (!current) { root.pendingReply = ""; root.pendingThreadId = ""; return }
-      root.finishSend(operationId, exitCode)
-      if (exitCode === 0 && root.selectedConversation
+      root.finishSend(operationId, outcome)
+      if (outcome.state === "accepted" && root.selectedConversation
           && String(root.selectedConversation.threadId) === root.pendingThreadId)
         replyField.text = ""
       root.pendingReply = ""

@@ -189,6 +189,19 @@ ShellRoot {
         test.phone.installed = false
         test.phone.applyStatus(JSON.stringify(missing))
         test.check(test.phone.installed && !panel.activePhoneReady, "missing daemon hid installed manager or allowed actions")
+        test.phone.applyStatus(test.status([test.first]))
+        panel.selectDevice("abc123")
+        test.check(test.phone.shareText("abc123", "  exact 😀  ") === true, "share start rejected")
+        test.check(test.phone.actionBusy, "share did not synchronously block duplicate action")
+        test.check(test.phone.shareText("abc123", "duplicate") === false, "duplicate share accepted")
+      } else if (test.step === 6) {
+        test.check(!test.phone.actionBusy, "share remained busy")
+        test.check(test.phone.actionStatus.indexOf("Pixel:") === 0, "share result lost original destination")
+        test.phone.applyStatus(test.status([test.first]))
+        test.check(test.phone.replyToNotification("abc123", "reply-id", "  exact 😀  ") === true, "notification reply rejected")
+        test.check(test.phone.replyToNotification("abc123", "reply-id", "duplicate") === false, "duplicate reply accepted")
+      } else if (test.step === 7) {
+        test.check(!test.phone.actionBusy, "notification reply remained busy")
         console.log("omalink selection runtime tests passed")
         Qt.quit()
       }

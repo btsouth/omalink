@@ -7,6 +7,7 @@ ShellRoot {
   property int step: 0
   property int ticks: 0
   property bool checkedBusyEdit: false
+  property bool startedSlow: false
   function check(condition, message) {
     if (!condition) {
       console.error("FAIL: " + message)
@@ -126,8 +127,15 @@ ShellRoot {
         messages.openThread(messages.conversations[0])
         test.next()
       } else if (test.step === 15 && messages.messages.length) {
-        messages.replyText = "late completion"
-        messages.sendReply()
+        if (!test.startedSlow) {
+          messages.replyText = "late completion"
+          messages.sendReply()
+          messages.sendReply()
+          test.check(messages.sendOperations.length === 1, "duplicate start created another send")
+          test.startedSlow = true
+          return
+        }
+        // Allow stdin to be written before closing to exercise a late result.
         messages.close()
         messages.open('{"deviceId":"slow"}')
         test.next()
@@ -152,6 +160,20 @@ ShellRoot {
         test.check(messages.latestSend.state !== "confirmed-in-history",
                    "failed history read confirmed a send from partial output")
         if (messages.latestSend.state !== "unconfirmed") return
+        messages.close()
+        messages.open('{"deviceId":"dependency"}')
+        test.next()
+      } else if (test.step === 21 && messages.conversations.length) {
+        messages.openThread(messages.conversations[0])
+        test.next()
+      } else if (test.step === 22 && messages.messages.length) {
+        messages.replyText = "keep dependency draft"
+        messages.sendReply()
+        test.next()
+      } else if (test.step === 23 && !messages.sending) {
+        test.check(messages.latestSend.state === "failed", "preflight rejection was not classified failed")
+        test.check(messages.replyText === "keep dependency draft", "preflight rejection cleared draft")
+        test.check(messages.error.indexOf("python-dbus") !== -1, "dependency recovery instruction missing")
         messages.close()
         console.log("omalink send runtime tests passed")
         Qt.quit()
