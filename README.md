@@ -285,6 +285,7 @@ node tests/model.test.js
 node tests/send-state.test.js
 node tests/capabilities.test.js
 node tests/file-share-model.test.js
+node tests/private-text.test.js
 bash tests/qml.test.sh
 shellcheck -S warning bin/omalink bin/omalink-files tests/*.sh
 omabox run -- omarchy plugin validate .
