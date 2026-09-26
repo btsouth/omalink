@@ -36,6 +36,7 @@ Panel {
   readonly property bool messagesReady: phone.canUseCapability(activePhoneId, "messaging")
   property bool showDiagnostics: false
   property bool showCapabilities: false
+  property bool showFiles: false
   onMessagesReadyChanged: invalidatePhoneReads()
   onActivePhoneIdChanged: {
     shareDeviceId = ""
@@ -198,7 +199,8 @@ Panel {
     anchorItem: button
     owner: root
     bar: root.bar
-    open: root.opened
+    // Let the native picker receive pointer and keyboard input above the layer panel.
+    open: root.opened && !fileShare.pickerVisible
     contentWidth: panel.fittedContentWidth(Style.space(340))
     contentHeight: panel.fittedContentHeight(content.implicitHeight, Style.space(480))
 
@@ -444,7 +446,7 @@ Panel {
 
                 Repeater {
                   model: [{key: "messaging", label: qsTr("Messages")},
-                    {key: "sharing", label: qsTr("Text and links")},
+                    {key: "sharing", label: qsTr("Files, text and links")},
                     {key: "clipboard", label: qsTr("Clipboard")},
                     {key: "notifications", label: qsTr("Notifications")},
                     {key: "ring", label: qsTr("Ring")},
@@ -672,6 +674,27 @@ Panel {
             bordered: true
             onClicked: root.openMessages({})
           }
+        }
+
+        Button {
+          text: root.showFiles ? qsTr("Hide file sharing") : qsTr("Share files")
+          visible: root.activePhoneId !== ""
+          focusable: true
+          Accessible.role: Accessible.Button
+          Accessible.name: text
+          onClicked: root.showFiles = !root.showFiles
+        }
+
+        FileShare {
+          id: fileShare
+          visible: root.showFiles
+          Layout.fillWidth: true
+          deviceId: phone.selectedDeviceId
+          deviceName: phone.selectedDeviceName
+          canShare: phone.canUseCapability(phone.selectedDeviceId, "sharing")
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          onRequestFinished: phone.refresh()
         }
 
         Button {

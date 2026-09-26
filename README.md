@@ -28,6 +28,7 @@ account or cloud relay.
   actions; videos and other attachments open in their default app
 - Send the desktop clipboard to the phone
 - Send text or links to the phone
+- Choose multiple local files, preview the destination and submit one bounded batch
 - Ring a misplaced phone
 - Now-playing media controls for the phone: track, artist, and album art with
   play/pause, previous/next, seek, and volume
@@ -67,6 +68,33 @@ can require a phone-side gesture; see the [KDE Connect guide](https://userbase.k
 
 Both devices must be able to reach one another, normally on the same local
 network. OmaLink never installs packages itself.
+
+## Share files
+
+Select a phone, expand **Share files**, choose one or more files, review the
+preview and press **Send files**. Selecting files does not submit them. Switching
+phones or losing file-sharing availability clears the selection. A submitted
+request keeps its original destination and is never retried automatically.
+
+Each request allows up to 32 readable regular files, totaling at most 8 GiB.
+Folders and special files are refused. Unicode and spaces are preserved;
+explicit symlinks to readable regular files are allowed. Files can change after
+validation because KDE Connect opens them asynchronously.
+
+A successful request means KDE Connect accepted the batch, not that the files
+arrived. Its `shareUrls` API does not expose aggregate outgoing progress,
+completion or cancellation. Check KDE Connect and the phone for results. If the
+outcome is unknown, check before choosing the files again to avoid duplicates.
+OmaLink keeps the preview in memory and clears it on submission; it adds no
+persistent transfer or path history. KDE Connect and the native picker manage
+their own caches and recent-file metadata. Incoming transfer activity is not yet
+shown in OmaLink. Drag-and-drop is deferred; use the file picker.
+
+For an explicit device ID and local absolute paths from a checkout:
+
+```sh
+bin/omalink-files DEVICE_ID '/absolute/path/first file.pdf' '/absolute/path/photo.jpg'
+```
 
 ## Connection setup and diagnostics
 
@@ -248,14 +276,19 @@ Run the checks in an isolated desktop with [omabox](https://github.com/btsouth/o
 ```sh
 node tests/model.test.js
 node tests/send-state.test.js
+node tests/capabilities.test.js
+node tests/file-share-model.test.js
 bash tests/qml.test.sh
-shellcheck -S warning bin/omalink
+shellcheck -S warning bin/omalink bin/omalink-files tests/*.sh
 omabox run -- omarchy plugin validate .
 omabox run -- bash tests/cli.test.sh
 omabox run -- python tests/audit.test.py
+omabox run -- python tests/capabilities.test.py
+omabox run -- bash tests/files.test.sh
 omabox run -- bash tests/runtime.test.sh
 omabox run -- bash tests/selection-runtime.test.sh
 omabox run -- bash tests/send-runtime.test.sh
+omabox run -- bash tests/file-share-runtime.test.sh
 ```
 
 The test suite uses mock phone data and does not send messages.
