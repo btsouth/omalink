@@ -231,6 +231,10 @@ chmod +x "$temp_dir/busctl"
 
 cat >"$temp_dir/dbus-monitor" <<'EOF'
 #!/usr/bin/env bash
+if [[ -n ${OMALINK_TEST_MONITOR_HOLD:-} ]]; then
+  printf '%s\n' "$$" >"$OMALINK_TEST_MONITOR_HOLD"
+  exec sleep 300
+fi
 printf 'signal time=1.0 sender=:1.5 -> destination=(null destination) serial=9 path=/modules/kdeconnect/devices/abc123/notifications; interface=org.kde.kdeconnect.device.notifications; member=notificationPosted\n'
 printf '   string "notif.9"\n'
 printf 'signal time=1.1 sender=:1.5 -> destination=(null destination) serial=10 path=/modules/kdeconnect/devices/abc123/notifications; interface=org.kde.kdeconnect.device.notifications; member=notificationPosted\n'
@@ -775,6 +779,27 @@ fi
 : >"$temp_dir/notify-send.log"
 if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --popups names status >/dev/null 2>&1; then
   echo "an unknown popup mode was accepted" >&2; exit 1
+fi
+# A watcher stopped with SIGKILL, as the shell stops it, takes its monitor
+# with it, and the next watcher removes the work directory it left.
+kill_runtime="$temp_dir/kill-runtime"
+mkdir -m 700 "$kill_runtime"
+OMALINK_TEST_MONITOR_HOLD="$temp_dir/monitor.pid" XDG_RUNTIME_DIR="$kill_runtime" PATH="$temp_dir:/usr/bin" \
+  "$project_dir/bin/omalink" --popups off watch >/dev/null 2>&1 &
+held_watcher=$!
+for _ in $(seq 1 50); do [[ -s "$temp_dir/monitor.pid" ]] && break; sleep 0.1; done
+held_monitor="$(cat "$temp_dir/monitor.pid")"
+kill -0 "$held_monitor"
+kill -KILL "$held_watcher"
+wait "$held_watcher" 2>/dev/null || true
+for _ in $(seq 1 50); do kill -0 "$held_monitor" 2>/dev/null || break; sleep 0.1; done
+if kill -0 "$held_monitor" 2>/dev/null; then
+  kill "$held_monitor"; echo "a killed watcher left its monitor running" >&2; exit 1
+fi
+compgen -G "$kill_runtime/omalink-watch.??????" >/dev/null
+XDG_RUNTIME_DIR="$kill_runtime" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --popups off watch >/dev/null
+if compgen -G "$kill_runtime/omalink-watch.??????" >/dev/null; then
+  echo "a killed watcher's work directory was not removed" >&2; exit 1
 fi
 # A predictable pid is no longer read, and a lock symlink is refused.
 sleep 60 &

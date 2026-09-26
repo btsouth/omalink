@@ -817,6 +817,7 @@ open_panel() {
 
 watch() {
   command -v dbus-monitor >/dev/null 2>&1 || { echo "dbus-monitor is required" >&2; exit 1; }
+  command -v setpriv >/dev/null 2>&1 || { echo "setpriv from util-linux is required" >&2; exit 1; }
   # Never use shared /tmp names or trust a pid left by another process.
   local runtime="${XDG_RUNTIME_DIR:-}" work monitor_pid="" pid line device_id="" notification_id
   local -a workers=() live=() options=(--popups "$NOTIFY_POPUPS")
@@ -829,6 +830,12 @@ watch() {
   [[ ! -L $runtime/omalink-watch.lock ]] || exit 1
   exec 9>>"$runtime/omalink-watch.lock"
   flock 9
+  # Holding the lock means no other watcher is alive, so any work directory
+  # left here belongs to one that was killed before its trap could run.
+  local stale
+  for stale in "$runtime"/omalink-watch.??????; do
+    [[ -d $stale && ! -L $stale && -O $stale ]] && rm -rf -- "$stale"
+  done
   work="$(mktemp -d "$runtime/omalink-watch.XXXXXX")"
   cleanup_watch() {
     for pid in "$monitor_pid" "${workers[@]}"; do
@@ -845,7 +852,10 @@ watch() {
   [[ -z $NOTIFY_APPS_SET ]] || options+=(--notify-apps "$NOTIFY_APPS")
   [[ -z $NOTIFY_RULES_SET ]] || options+=(--notify-rules "$NOTIFY_RULES")
   mkfifo "$work/signals"
-  setsid timeout --kill-after=1s 1h dbus-monitor --session \
+  # The shell stops a watcher with SIGKILL, which skips the trap above. The
+  # parent-death signal makes the kernel stop the monitor too, instead of
+  # leaving it running for up to an hour.
+  setsid setpriv --pdeathsig TERM timeout --kill-after=1s 1h dbus-monitor --session \
     "type='signal',sender='org.kde.kdeconnect',interface='org.kde.kdeconnect.device.notifications',member='notificationPosted'" \
     >"$work/signals" 2>/dev/null 9>&- &
   monitor_pid=$!
