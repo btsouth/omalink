@@ -62,6 +62,23 @@ function kdeEndpointFromPayload(payload) {
   return endpoint
 }
 
+// BlueFerry currently identifies a local history backend, not a physical phone.
+// Opening that route requires an explicit owner from a successful status read.
+function messageEndpointFromPayload(payload) {
+  var kde = kdeEndpointFromPayload(payload)
+  if (kde) return kde
+  if (!record(payload) || !validOwner(payload.backendOwner)) return null
+  var value = normalizeEndpoint(payload.endpoint)
+  if (!value || value.provider !== "blueferry" || value.instanceId !== "local"
+      || value.deviceId !== "local-history" || value.accountId !== null) return null
+  if (Object.prototype.hasOwnProperty.call(payload, "deviceId") && payload.deviceId !== value.deviceId) return null
+  for (var field of ["deviceName", "conversationHint"])
+    if (payload[field] !== undefined && payload[field] !== null && typeof payload[field] !== "string") return null
+  if (payload.threadId !== undefined && payload.threadId !== null
+      && !opaqueId(payload.threadId, 1024)) return null
+  return value
+}
+
 function endpointParts(endpoint) {
   var value = normalizeEndpoint(endpoint)
   return value ? [value.provider, value.instanceId, value.deviceId, value.accountId] : null
@@ -163,7 +180,7 @@ function capabilityAvailable(snapshot, key) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {schemaVersion: schemaVersion, maxSnapshotLength: maxSnapshotLength,
-    normalizeEndpoint: normalizeEndpoint, kdeEndpoint: kdeEndpoint, kdeEndpointFromPayload: kdeEndpointFromPayload, endpointKey: endpointKey,
+    normalizeEndpoint: normalizeEndpoint, kdeEndpoint: kdeEndpoint, kdeEndpointFromPayload: kdeEndpointFromPayload, messageEndpointFromPayload: messageEndpointFromPayload, endpointKey: endpointKey,
     threadKey: threadKey, requestContext: requestContext, replyIsCurrent: replyIsCurrent,
     normalizeConnection: normalizeConnection, normalizeCapabilities: normalizeCapabilities,
     normalizeHistory: normalizeHistory, normalizeSnapshot: normalizeSnapshot,

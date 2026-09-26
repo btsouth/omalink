@@ -9,18 +9,29 @@ import qs.Commons
 import qs.Ui
 import "Model.js" as Model
 import "ProviderModel.js" as Providers
+import "BlueFerryModel.js" as BlueFerry
 import "SendState.js" as SendState
 import "PrivateText.js" as PrivateText
 
 Item {
   id: root
 
+  // The shell injects its public, reactive bar settings into overlay plugins.
+  property var shell: null
+  readonly property bool blueFerryEnabled: BlueFerry.enabledInBar(shell ? shell.barConfig : null)
+  onBlueFerryEnabledChanged: if (!blueFerryEnabled && readOnlyProvider) close()
   property bool opened: false
   property int generation: 0
   property var endpoint: null
   readonly property string endpointKey: Providers.endpointKey(endpoint)
   readonly property string deviceId: endpoint ? endpoint.deviceId : ""
   property string deviceName: ""
+  property string backendOwner: ""
+  readonly property bool readOnlyProvider: endpoint !== null && endpoint.provider === "blueferry"
+  property bool providerInvalidated: false
+  property bool browsingContacts: false
+  property string contactsError: ""
+  readonly property var visibleProviderContacts: searchText.trim() === "" ? contacts : Model.filterContacts(contacts, searchText)
   property var conversations: []
   property var contacts: []
   property var selectedConversation: null
@@ -69,12 +80,15 @@ Item {
     if (typeof payloadJson !== "string" || payloadJson.length > 65536) return false
     var payload
     try { payload = JSON.parse(payloadJson) } catch (parseError) { return false }
-    var nextEndpoint = Providers.kdeEndpointFromPayload(payload)
-    if (!nextEndpoint) return false
+    var nextEndpoint = Providers.messageEndpointFromPayload(payload)
+    if (!nextEndpoint || (nextEndpoint.provider === "blueferry" && !blueFerryEnabled)) return false
     var nextKey = Providers.endpointKey(nextEndpoint)
     if (sending && nextKey !== endpointKey) return false
-    if (!opened || nextKey !== endpointKey) close()
+    var nextOwner = nextEndpoint.provider === "blueferry" ? payload.backendOwner : ""
+    if (!opened || nextKey !== endpointKey || backendOwner !== nextOwner) close()
     endpoint = nextEndpoint
+    backendOwner = nextOwner
+    providerInvalidated = false
     deviceName = String(payload.deviceName || deviceId).slice(0, 256)
     pendingOpenTitle = String(payload.conversationHint || "")
     pendingOpenThreadId = payload.threadId === undefined || payload.threadId === null
@@ -90,6 +104,11 @@ Item {
   function close() {
     opened = false
     generation++
+    ferryThreads.cancel()
+    ferryMessages.cancel()
+    ferryContacts.cancel()
+    browsingContacts = false
+    contactsError = ""
     newMessageProcess.forgetPayload()
     replyProcess.forgetPayload()
     conversationProcess.running = false
@@ -129,6 +148,7 @@ Item {
   }
 
   function refresh() {
+    if (readOnlyProvider && browsingContacts) { refreshContacts(); return }
     if (composing) return
     if (selectedConversation) {
       openThread(selectedConversation)
@@ -138,7 +158,15 @@ Item {
   }
 
   function refreshConversations() {
-    if (!opened || deviceId === "" || conversationProcess.running) return
+    if (!opened || deviceId === "" || conversationProcess.running || providerInvalidated) return
+    if (readOnlyProvider) {
+      if (ferryThreads.running) return
+      if (!selectedConversation) loading = true
+      error = ""
+      ferryThreads.generation = generation
+      ferryThreads.start(providerRequest("threads"))
+      return
+    }
     if (!selectedConversation) loading = true
     error = ""
     conversationProcess.command = [helperPath, "conversations", deviceId]
@@ -147,14 +175,36 @@ Item {
   }
 
   function refreshContacts() {
-    if (!opened || deviceId === "" || contactProcess.running) return
+    if (!opened || deviceId === "" || contactProcess.running || providerInvalidated) return
+    if (readOnlyProvider) {
+      if (ferryContacts.running) return
+      contactsError = ""
+      ferryContacts.generation = generation
+      ferryContacts.start(providerRequest("contacts"))
+      return
+    }
     contactProcess.command = [helperPath, "contacts", deviceId]
     contactProcess.generation = generation
     contactProcess.running = true
   }
 
   function openThread(conversation) {
-    if (!opened || !conversation || threadProcess.running) return
+    if (!opened || !conversation || threadProcess.running || providerInvalidated) return
+    if (readOnlyProvider) {
+      if (!Providers.threadKey(endpoint, conversation.threadId)) return
+      ferryMessages.cancel()
+      selectedConversation = conversation
+      browsingContacts = false
+      messages = messageCache[threadCacheKey(conversation.threadId)] || []
+      loading = messages.length === 0
+      error = ""
+      ferryMessages.generation = generation
+      ferryMessages.threadId = conversation.threadId
+      var request = providerRequest("messages")
+      request.threadId = conversation.threadId
+      ferryMessages.start(request)
+      return
+    }
     if (conversation.unread && conversation.threadId !== null && conversation.threadId !== undefined)
       Quickshell.execDetached([helperPath, "mark-seen", deviceId,
         String(conversation.threadId), String(Math.round(Number(conversation.timestamp) || 0))])
@@ -198,6 +248,9 @@ Item {
   }
 
   function showConversations() {
+    if (readOnlyProvider) ferryMessages.cancel()
+    browsingContacts = false
+    searchText = ""
     selectedConversation = null
     composing = false
     recipientQuery = ""
@@ -209,6 +262,7 @@ Item {
   }
 
   function startCompose() {
+    if (readOnlyProvider) return
     selectedConversation = null
     composing = true
     recipientQuery = ""
@@ -314,6 +368,7 @@ Item {
   }
 
   function sendNewMessage() {
+    if (readOnlyProvider) return
     var destination = recipientNumber !== "" ? recipientNumber : recipientField.text.trim()
     var message = composeMessage.text
     if (destination === "" || message.trim() === "" || sending || newMessageProcess.running || replyProcess.running || !opened) return
@@ -335,6 +390,7 @@ Item {
   // Every route that opens a phone attachment outside OmaLink goes through the
   // helper, which refuses files that would run and detaches the viewer.
   function openAttachmentExternally(path) {
+    if (readOnlyProvider) return
     if (path === "" || openProcess.running) return
     openProcess.command = [helperPath, "attachment-open", String(path)]
     openProcess.generation = generation
@@ -342,6 +398,7 @@ Item {
   }
 
   function openAttachment(attachment) {
+    if (readOnlyProvider) return
     if (!attachment) return
     var unique = String(attachment.unique || "")
     if (unique === "") return
@@ -380,6 +437,7 @@ Item {
   }
 
   function sendReply() {
+    if (readOnlyProvider) return
     var message = replyField.text
     if (!selectedConversation || message.trim() === "" || sending || newMessageProcess.running || replyProcess.running || !opened) return
     var threadId = selectedConversation.threadId
@@ -403,6 +461,105 @@ Item {
     onTriggered: {
       root.nowMs = Date.now()
       root.refresh()
+    }
+  }
+
+  function providerRequest(operation) {
+    return {version:1, operation:operation, endpoint:endpoint, expectedOwner:backendOwner}
+  }
+
+  function providerFailure(result, contactOnly) {
+    if (result.code === "thread_unavailable" && selectedConversation) {
+      var threadId = selectedConversation.threadId
+      var key = threadCacheKey(threadId)
+      var nextCache = {}
+      for (var cached in messageCache) if (cached !== key) nextCache[cached] = messageCache[cached]
+      messageCache = nextCache
+      cacheOrder = cacheOrder.filter(function(item) { return item !== key })
+      historyConversations = historyConversations.filter(function(item) { return item.threadId !== threadId })
+      conversations = historyConversations
+      selectedConversation = null
+      messages = []
+      error = result.error
+      return
+    }
+    if (["backend_changed", "backend_unavailable", "api_incompatible", "storage_unavailable",
+         "authorization_required", "invalid_response"].indexOf(result.code) !== -1) {
+      generation++
+      ferryThreads.cancel()
+      ferryMessages.cancel()
+      ferryContacts.cancel()
+      providerInvalidated = true
+      historyConversations = []
+      conversations = []
+      selectedConversation = null
+      pendingOpenTitle = ""
+      pendingOpenThreadId = ""
+      messages = []
+      messageCache = ({})
+      cacheOrder = []
+      contacts = []
+      loading = false
+      error = result.error + " " + qsTr("Close and reopen BlueFerry history after resolving this.")
+      contactsError = error
+    } else if (contactOnly) contactsError = result.error
+    else error = result.error
+  }
+
+  function showProviderContacts() {
+    if (!readOnlyProvider || providerInvalidated) return
+    ferryMessages.cancel()
+    selectedConversation = null
+    messages = []
+    browsingContacts = true
+    searchText = ""
+    refreshContacts()
+  }
+
+  ProviderRequest {
+    id: ferryThreads
+    helperPath: root.pluginDir + "/bin/omalink-blueferry"
+    property int generation: -1
+    onFinished: function(transport) {
+      if (!root.opened || !root.readOnlyProvider || generation !== root.generation) return
+      var result = BlueFerry.result(transport, "threads", root.backendOwner)
+      root.loading = false
+      if (!result.ok) { root.providerFailure(result, false); return }
+      root.historyConversations = result.items
+      root.conversations = result.items
+      if (root.pendingOpenThreadId !== "") {
+        var target = result.items.find(function(item) { return item.threadId === root.pendingOpenThreadId })
+        root.pendingOpenThreadId = ""
+        if (target && !root.selectedConversation && !root.browsingContacts) root.openThread(target)
+      }
+    }
+  }
+
+  ProviderRequest {
+    id: ferryMessages
+    helperPath: root.pluginDir + "/bin/omalink-blueferry"
+    property int generation: -1
+    property string threadId: ""
+    onFinished: function(transport) {
+      if (!root.opened || !root.readOnlyProvider || generation !== root.generation
+          || !root.selectedConversation || root.selectedConversation.threadId !== threadId) return
+      var result = BlueFerry.result(transport, "messages", root.backendOwner)
+      root.loading = false
+      if (!result.ok) { root.providerFailure(result, false); return }
+      root.setThreadMessages(threadId, result.items)
+    }
+  }
+
+  ProviderRequest {
+    id: ferryContacts
+    helperPath: root.pluginDir + "/bin/omalink-blueferry"
+    property int generation: -1
+    onFinished: function(transport) {
+      if (!root.opened || !root.readOnlyProvider || generation !== root.generation) return
+      var result = BlueFerry.result(transport, "contacts", root.backendOwner)
+      if (!result.ok) { root.providerFailure(result, true); return }
+      root.contacts = result.items
+      root.contactsError = ""
     }
   }
 
@@ -652,7 +809,7 @@ Item {
       focus: true
       Keys.onEscapePressed: {
         if (root.viewerOpen) root.closeViewer()
-        else if (root.selectedConversation || root.composing) root.showConversations()
+        else if (root.selectedConversation || root.composing || root.browsingContacts) root.showConversations()
         else root.close()
       }
       Keys.onPressed: function(event) {
@@ -698,7 +855,7 @@ Item {
             Layout.fillWidth: true
 
             PanelActionButton {
-              visible: root.selectedConversation !== null || root.composing
+              visible: root.selectedConversation !== null || root.composing || root.browsingContacts
               iconText: "󰁍"
               tooltipText: "Back to conversations"
               foreground: root.foreground
@@ -710,7 +867,7 @@ Item {
               Layout.fillWidth: true
               text: root.selectedConversation
                 ? Model.conversationTitle(root.selectedConversation)
-                : (root.composing ? "New message" : "Messages")
+                : (root.browsingContacts ? qsTr("Contacts") : root.composing ? "New message" : "Messages")
               textFormat: Text.PlainText
               elide: Text.ElideRight
               color: root.foreground
@@ -720,16 +877,26 @@ Item {
             }
 
             Button {
-              visible: root.selectedConversation === null && !root.composing
+              visible: !root.readOnlyProvider && root.selectedConversation === null && !root.composing
               text: "New message"
+              enabled: !root.readOnlyProvider
               foreground: root.foreground
               fontFamily: root.fontFamily
               bordered: true
               onClicked: root.startCompose()
             }
 
+            Button {
+              visible: root.readOnlyProvider && !root.browsingContacts && root.selectedConversation === null
+              text: qsTr("Contacts")
+              enabled: !root.providerInvalidated
+              focusable: true
+              onClicked: root.showProviderContacts()
+            }
+
             PanelActionButton {
               visible: !root.composing
+              enabled: !root.providerInvalidated
               iconText: "󰑐"
               tooltipText: "Refresh"
               foreground: root.foreground
@@ -748,9 +915,20 @@ Item {
 
           Text {
             Layout.fillWidth: true
-            text: qsTr("Phone: %1").arg(root.deviceName)
+            text: root.readOnlyProvider ? qsTr("BlueFerry local history · Experimental") : qsTr("Phone: %1").arg(root.deviceName)
             textFormat: Text.PlainText
             elide: Text.ElideRight
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+
+          Text {
+            visible: root.readOnlyProvider
+            Layout.fillWidth: true
+            text: qsTr("Read-only, limited history observed by BlueFerry. It may be incomplete and is not tied to your selected KDE Connect phone. Viewing does not mark messages read.")
+            textFormat: Text.PlainText
+            wrapMode: Text.Wrap
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
@@ -781,7 +959,7 @@ Item {
           }
 
           Text {
-            visible: root.error !== "" || (!root.composing && (root.loading || (root.selectedConversation ? root.messages.length === 0 : root.filteredConversations.length === 0)))
+            visible: !root.browsingContacts && (root.error !== "" || (!root.composing && (root.loading || (root.selectedConversation ? root.messages.length === 0 : root.filteredConversations.length === 0))))
             Layout.fillWidth: true
             text: root.error !== "" ? root.error : (root.loading ? "Loading…" : (root.selectedConversation ? "No messages" : (root.searchText === "" ? "No conversations" : "No matches")))
             color: root.dim
@@ -798,7 +976,7 @@ Item {
             TextField {
               id: searchField
               Layout.fillWidth: true
-              placeholderText: "Search conversations"
+              placeholderText: root.browsingContacts ? qsTr("Filter loaded contacts") : "Search conversations"
               text: root.searchText
               foreground: root.foreground
               font.family: root.fontFamily
@@ -824,7 +1002,7 @@ Item {
 
           ListView {
             id: conversationList
-            visible: root.selectedConversation === null && !root.composing
+            visible: root.selectedConversation === null && !root.composing && !root.browsingContacts
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
@@ -839,6 +1017,13 @@ Item {
               required property var modelData
               width: ListView.view.width
               height: row.implicitHeight + Style.space(18)
+              activeFocusOnTab: true
+              Accessible.role: Accessible.Button
+              Accessible.name: Model.conversationTitle(modelData)
+              Keys.onReturnPressed: root.openThread(modelData)
+              Keys.onSpacePressed: root.openThread(modelData)
+              border.width: activeFocus ? 1 : 0
+              border.color: Color.accent
               color: rowMouse.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent) : "transparent"
               radius: Style.cornerRadius
 
@@ -911,6 +1096,46 @@ Item {
                 onClicked: {
                   root.openThread(modelData)
                 }
+              }
+            }
+          }
+
+          Text {
+            visible: root.browsingContacts
+            Layout.fillWidth: true
+            text: root.contactsError !== "" ? root.contactsError : ferryContacts.running ? qsTr("Loading contacts…")
+              : root.visibleProviderContacts.length === 0 ? qsTr("No contacts in this loaded subset") : ""
+            textFormat: Text.PlainText
+            wrapMode: Text.Wrap
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+
+          ListView {
+            visible: root.browsingContacts
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            clip: true
+            spacing: Style.space(8)
+            model: root.visibleProviderContacts
+            Controls.ScrollBar.vertical: Controls.ScrollBar { policy: Controls.ScrollBar.AsNeeded }
+            delegate: Item {
+              required property var modelData
+              width: ListView.view.width
+              height: contactText.implicitHeight
+              TextEdit {
+                id: contactText
+                width: parent.width
+                text: modelData.name + "\n" + modelData.number
+                textFormat: TextEdit.PlainText
+                readOnly: true
+                selectByMouse: true
+                wrapMode: TextEdit.Wrap
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                Accessible.name: modelData.name + ", " + modelData.number
               }
             }
           }
@@ -1067,6 +1292,26 @@ Item {
                     }
                   }
 
+                  Text {
+                    visible: root.readOnlyProvider && !!modelData.sender
+                    Layout.fillWidth: true
+                    text: modelData.sender || ""
+                    textFormat: Text.PlainText
+                    wrapMode: Text.Wrap
+                    color: bubble.contentColor
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+                  Text {
+                    visible: root.readOnlyProvider && modelData.bodyTruncated === true
+                    text: qsTr("Message shortened by the backend or display limit")
+                    textFormat: Text.PlainText
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                    color: bubble.contentColor
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
                   TextEdit {
                     id: messageText
                     visible: text !== ""
@@ -1242,7 +1487,7 @@ Item {
           }
 
           RowLayout {
-            visible: root.selectedConversation !== null
+            visible: root.selectedConversation !== null && !root.readOnlyProvider
             Layout.fillWidth: true
             spacing: Style.space(8)
 
@@ -1269,7 +1514,9 @@ Item {
 
           Text {
             Layout.fillWidth: true
-            text: root.selectedConversation
+            text: root.readOnlyProvider
+              ? (root.browsingContacts ? qsTr("Showing up to 200 cached contact addresses. Filtering searches this loaded subset.") : qsTr("Bounded local history · R to refresh · Esc to go back"))
+              : root.selectedConversation
               ? "Enter to send · Right-click a message to copy it · R to refresh · Esc to go back"
               : root.composing
                 ? "Choose a synced contact or enter a phone number · Esc to cancel"

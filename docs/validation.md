@@ -40,6 +40,10 @@ omabox run -- bash tests/runtime.test.sh
 omabox run -- bash tests/selection-runtime.test.sh
 omabox run -- bash tests/send-runtime.test.sh
 omabox run -- bash tests/provider-runtime.test.sh
+omabox run -- bash tests/provider-request-runtime.test.sh
+omabox run -- bash tests/blueferry-runtime.test.sh
+omabox run -- bash tests/blueferry-service-runtime.test.sh
+omabox run -- /usr/bin/python3 tests/blueferry.test.py
 omabox run -- bash tests/file-share-runtime.test.sh
 omabox run -- bash tests/private-request-runtime.test.sh
 omabox run -- /usr/bin/python3 tests/text-transport.test.py

@@ -97,3 +97,9 @@ clean.capabilities.messaging.state = "disabled"
 assert.equal(snapshot.endpoint.deviceId,opaque.deviceId)
 assert.equal(snapshot.capabilities.messaging.state,"available")
 console.log("provider identity and contract tests passed")
+
+const historyEndpoint = {provider:"blueferry",instanceId:"local",deviceId:"local-history",accountId:null}
+assert.deepEqual(provider.messageEndpointFromPayload({endpoint:historyEndpoint,backendOwner:":1.42"}),historyEndpoint)
+assert.equal(provider.messageEndpointFromPayload({endpoint:historyEndpoint}),null)
+assert.equal(provider.messageEndpointFromPayload({endpoint:historyEndpoint,backendOwner:"io.weirdware.BlueFerry"}),null)
+assert.equal(provider.messageEndpointFromPayload({endpoint:historyEndpoint,backendOwner:":1.42",deviceId:"abc123"}),null)
