@@ -47,6 +47,7 @@ omabox run -- /usr/bin/python3 tests/blueferry.test.py
 omabox run -- bash tests/file-share-runtime.test.sh
 omabox run -- bash tests/private-request-runtime.test.sh
 omabox run -- /usr/bin/python3 tests/text-transport.test.py
+omabox run -- bash tests/notification-rules-runtime.test.sh
 ```
 
 The direct D-Bus transport fixture needs the development-only `python-gobject`
@@ -54,8 +55,9 @@ package in addition to the runtime `python-dbus` dependency.
 
 These suites use fake phone data and controlled transports. They cover helper
 boundaries, capabilities, selected-phone routing, stale replies, message
-outcomes, rejected provider routes, endpoint-scoped caches, file submission, QML
-loading, and lifecycle behavior. Inspect the
+outcomes, rejected provider routes, endpoint-scoped caches, file submission,
+notification rule parity and stale-status suppression, QML loading, and
+lifecycle behavior. Inspect the
 affected UI in omabox as well, including keyboard navigation and both light and
 dark themes. A successful CI job does not imply these checks ran.
 

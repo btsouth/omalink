@@ -2,6 +2,14 @@
 
 ## 0.3.0 - Unreleased
 
+- Add per-app notification rules for the selected phone. Allow, Mute or Default
+  apps seen in the phone's current notifications, matched by validated Android
+  package or clearly labeled name-only fallback. Status, popups and Clear all
+  share one policy, and the source filter setting is never rewritten.
+- Explain filtered-empty notification lists and scan limits, stop reporting
+  malformed notification IDs as package names, and discard status reads started
+  under an older notification policy.
+
 - Add a panel content setting that hides message previews and notification rows,
   clears pending notification replies, and preserves counts and source filters.
 

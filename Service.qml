@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import "Model.js" as Model
+import "NotificationPolicy.js" as NotificationPolicy
 import "ProviderModel.js" as Providers
 
 Item {
@@ -47,16 +48,41 @@ Item {
   readonly property var notifySources: settings && settings["notifyApps"] !== undefined && settings["notifyApps"] !== null
     ? String(settings["notifyApps"]) : undefined
   readonly property string notifyPopups: String(setting("notifyPopups", "On")).toLowerCase() === "off" ? "off" : "on"
+  readonly property var notifyRules: NotificationPolicy.normalizeRules(setting("notifyAppRules", null))
+  readonly property string notifyRulesArgument: NotificationPolicy.helperArgument(notifyRules)
   readonly property bool mediaControls: String(setting("mediaControls", "On")).toLowerCase() !== "off"
   readonly property string pluginDir: Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "").replace(/\/$/, "")
   readonly property string helperPath: pluginDir + "/bin/omalink"
 
   function withNotify(command) {
     return [helperPath, "--popups", notifyPopups].concat(
-      notifySources !== undefined ? ["--notify-apps", notifySources] : [], command.slice(1))
+      notifySources !== undefined ? ["--notify-apps", notifySources] : [],
+      notifyRulesArgument !== "" ? ["--notify-rules", notifyRulesArgument] : [], command.slice(1))
   }
-  onNotifySourcesChanged: restartWatcher()
+  onNotifySourcesChanged: notificationPolicyChanged()
+  onNotifyRulesArgumentChanged: notificationPolicyChanged()
   onNotifyPopupsChanged: restartWatcher()
+
+  // A status read started under the old policy may still list a record the
+  // new policy hides. Its result is discarded and read again.
+  property int statusGeneration: 0
+  function notificationPolicyChanged() {
+    statusGeneration++
+    restartWatcher()
+  }
+
+  function notifyRulesFor(deviceId) {
+    return NotificationPolicy.phoneRules(notifyRules, Providers.endpointKey(Providers.kdeEndpoint(deviceId)))
+  }
+
+  // The complete new rule set for settings, or null when a limit is reached.
+  function notifyRulesWith(deviceId, key, state, label) {
+    return NotificationPolicy.withRule(notifyRules, Providers.endpointKey(Providers.kdeEndpoint(deviceId)), key, state, label)
+  }
+
+  function notifyRulesWithout(deviceId) {
+    return NotificationPolicy.withoutPhone(notifyRules, Providers.endpointKey(Providers.kdeEndpoint(deviceId)))
+  }
 
   function restartWatcher() {
     watchProcess.running = false
@@ -136,6 +162,7 @@ Item {
   function refresh() {
     if (statusProcess.running) return
     refreshing = true
+    statusProcess.generation = statusGeneration
     statusProcess.command = withNotify([helperPath, "status"])
     statusProcess.running = true
   }
@@ -289,12 +316,18 @@ Item {
 
   Process {
     id: statusProcess
+    property int generation: -1
+    readonly property bool current: generation === root.statusGeneration
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: root.applyStatus(text)
+      onStreamFinished: if (statusProcess.current) root.applyStatus(text)
     }
     onExited: function(exitCode) {
       root.refreshing = false
+      if (!statusProcess.current) {
+        Qt.callLater(root.refresh)
+        return
+      }
       if (exitCode !== 0) {
         root.statusReady = true
         root.statusFailed = true

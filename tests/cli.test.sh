@@ -72,6 +72,10 @@ if [[ " $* " == *" monitor "* ]]; then
   exit 0
 fi
 if [[ " $* " == *" sendAction "* ]]; then echo "sendAction $*" >>"$0.log"; exit 0; fi
+case "${*: -1}" in
+  title|text|iconPath|replyId|dismissable|isConversation)
+    [[ " $* " != *"/notifications/"* ]] || printf '%s\n' "$*" >>"$0.content.log" ;;
+esac
 if [[ " $* " == *" Set ssv "* ]]; then echo "setVolume $*" >>"$0.log"; exit 0; fi
 if [[ " $* " == *"mprisremote seek "* ]]; then echo "seek $*" >>"$0.log"; exit 0; fi
 case "${*: -1}" in
@@ -92,7 +96,11 @@ case "${*: -1}" in
       printf '{"type":"s","data":"%s"}\n' "$long"
       exit 0
     fi
-    if [[ " $* " == *"notif.3"* || " $* " == *"notif.10"* ]]; then
+    if [[ -n ${OMALINK_TEST_OPTION_NAMES:-} && " $* " == *"/notif.1 "* ]]; then
+      printf '%s\n' '{"type":"s","data":"-h"}'
+    elif [[ -n ${OMALINK_TEST_OPTION_NAMES:-} && " $* " == *"/notif.2 "* ]]; then
+      printf '%s\n' '{"type":"s","data":"--rawfile"}'
+    elif [[ " $* " == *"notif.3"* || " $* " == *"notif.10"* ]]; then
       printf '%s\n' '{"type":"s","data":"Visual Voicemail"}'
     elif [[ " $* " == *"notif.4"* || " $* " == *"notif.11"* ]]; then
       printf '%s\n' '{"type":"s","data":"Authenticator"}'
@@ -101,7 +109,9 @@ case "${*: -1}" in
     fi
     ;;
   internalId)
-    if [[ " $* " == *"notif.3"* || " $* " == *"notif.10"* ]]; then
+    if [[ -n ${OMALINK_TEST_BARE_ID:-} && " $* " == *"/notif.3 "* ]]; then
+      printf '%s\n' '{"type":"s","data":"12345"}'
+    elif [[ " $* " == *"notif.3"* || " $* " == *"notif.10"* ]]; then
       printf '%s\n' '{"type":"s","data":"0|com.samsung.vvm|1|null|1"}'
     elif [[ " $* " == *"notif.4"* || " $* " == *"notif.11"* ]]; then
       printf '%s\n' '{"type":"s","data":"0|com.azure.authenticator|1|null|1"}'
@@ -351,14 +361,77 @@ jq -e '(.devices[0].notifications | length) == 0' <<<"$many_filtered" >/dev/null
 OMALINK_TEST_MANY_NOTIFICATIONS=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --notify-apps nomatch status >/dev/null
 # The stub reports two devices, so the read cap is 100 per device.
 [[ "$(wc -l <"$temp_dir/busctl.appname.log")" == 200 ]]
+# Metadata is read for every scanned record, but content only for listed ones.
 : >"$temp_dir/busctl.appname.log"
+: >"$temp_dir/busctl.content.log"
 OMALINK_TEST_MANY_NOTIFICATIONS=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" status >/dev/null
-[[ "$(wc -l <"$temp_dir/busctl.appname.log")" -le 60 ]]
+[[ "$(wc -l <"$temp_dir/busctl.appname.log")" == 200 ]]
+[[ "$(grep -c ' title$' "$temp_dir/busctl.content.log")" == 50 ]]
+: >"$temp_dir/busctl.content.log"
+OMALINK_TEST_MANY_NOTIFICATIONS=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --notify-apps nomatch status >/dev/null
+[[ ! -s "$temp_dir/busctl.content.log" ]]
+# The stub matches IDs by substring: of notif.1-100, 13 are Visual Voicemail
+# (notif.3, .10, .30-39, .100) and 12 Authenticator (notif.4, .11, .40-49).
+# Authenticator records after the 25th listed one are still discovered.
+jq -e '.devices[0].notificationSources | .examined == 100 and .scanTruncated == true
+  and .permitted == 87 and .hidden == 13 and .listed == 25 and .unidentified == 0
+  and (.apps | map(.appName)) == ["Authenticator", "Messages", "Visual Voicemail"]
+  and (.apps | map(.count)) == [12, 75, 13]
+  and (.apps | map(.sourceAllowed)) == [true, true, false]' <<<"$many_status" >/dev/null
 jq -e '.installed == true and (.devices | length) == 2 and .devices[0].name == "Pixel 9" and .devices[0].battery.charge == 71 and .devices[0].connectivity.type == "5G" and (.devices[0].notifications | length) == 3' <<<"$status" >/dev/null
 voicemail_status="$(PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --notify-apps "voicemail" status)"
 jq -e '(.devices[0].notifications | length) == 1 and .devices[0].notifications[0].appName == "Visual Voicemail"' <<<"$voicemail_status" >/dev/null
 all_status="$(PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --notify-apps "" status)"
 jq -e '(.devices[0].notifications | length) == 4' <<<"$all_status" >/dev/null
+jq -e '.devices[0].notificationSources == {examined: 4, scanTruncated: false, permitted: 3, hidden: 1, listed: 3, unidentified: 0,
+  apps: [{key: "pkg:com.azure.authenticator", appName: "Authenticator", packageName: "com.azure.authenticator", count: 1, permitted: true, sourceAllowed: true},
+    {key: "pkg:com.google.android.apps.messaging", appName: "Messages", packageName: "com.google.android.apps.messaging", count: 2, permitted: true, sourceAllowed: true},
+    {key: "pkg:com.samsung.vvm", appName: "Visual Voicemail", packageName: "com.samsung.vvm", count: 1, permitted: false, sourceAllowed: false}]}' <<<"$status" >/dev/null
+: >"$temp_dir/busctl.content.log"
+PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" status >/dev/null
+if grep -q '/notif\.3 ' "$temp_dir/busctl.content.log"; then
+  echo "content of a filtered notification was read" >&2; exit 1
+fi
+
+# Exact per-phone rules: mute beats every source filter, allow beats the source
+# filter, and one phone's rules never apply to another phone.
+rules='{"abc123":{"pkg:com.samsung.vvm":"allow","pkg:com.azure.authenticator":"mute"}}'
+ruled_status="$(PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --notify-rules "$rules" status)"
+jq -e '(.devices[0].notifications | map(.appName)) == ["Messages", "Messages", "Visual Voicemail"]
+  and (.devices[1].notifications | map(.appName)) == ["Messages", "Messages", "Authenticator"]
+  and (.devices[0].notificationSources.apps | map(.permitted)) == [false, true, true]
+  and (.devices[0].notificationSources.apps | map(.sourceAllowed)) == [true, true, false]' <<<"$ruled_status" >/dev/null
+muted_all="$(PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --notify-apps "" \
+  --notify-rules '{"abc123":{"pkg:com.google.android.apps.messaging":"mute"}}' status)"
+jq -e '(.devices[0].notifications | map(.appName)) == ["Visual Voicemail", "Authenticator"]
+  and .devices[0].notificationSources.hidden == 2 and (.devices[1].notifications | length) == 4' <<<"$muted_all" >/dev/null
+: >"$temp_dir/busctl.content.log"
+OMALINK_TEST_MANY_NOTIFICATIONS=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --notify-apps "" \
+  --notify-rules '{"abc123":{"pkg:com.google.android.apps.messaging":"mute","pkg:com.samsung.vvm":"mute","pkg:com.azure.authenticator":"mute"}}' status >/dev/null
+if grep -q '/abc123/' "$temp_dir/busctl.content.log"; then
+  echo "content of a muted notification was read" >&2; exit 1
+fi
+# A separator-free internalId has no package identity. It falls back to a
+# name-only identity instead of reporting the whole ID as a package.
+bare_status="$(OMALINK_TEST_BARE_ID=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" \
+  --notify-rules '{"abc123":{"app:Visual Voicemail":"allow","pkg:12345":"mute"}}' status)"
+jq -e '(.devices[0].notifications | map(select(.appName == "Visual Voicemail")) | .[0].packageName) == ""
+  and (.devices[0].notificationSources.apps | map(.key)) == ["pkg:com.azure.authenticator", "pkg:com.google.android.apps.messaging", "app:Visual Voicemail"]
+  and (.devices[1].notifications | map(.appName) | index("Visual Voicemail")) == null' <<<"$bare_status" >/dev/null
+# Phone app names that look like jq options stay data.
+option_names="$(OMALINK_TEST_OPTION_NAMES=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --notify-apps "" status)"
+jq -e '(.devices[0].notifications | map(.appName)) == ["-h", "--rawfile", "Visual Voicemail", "Authenticator"]
+  and .devices[0].notificationSources.examined == 4
+  and (.devices[0].notificationSources.apps | map(.appName)) == ["-h", "Authenticator", "Visual Voicemail"]' <<<"$option_names" >/dev/null
+# Malformed entries are ignored; a policy that is not an object is refused.
+ignored="$(PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" \
+  --notify-rules '{"../bad":{"pkg:com.google.android.apps.messaging":"mute"},"abc123":{"pkg:com.google.android.apps.messaging":"block","com.azure.authenticator":"mute","pkg:com.samsung.vvm":["allow"]}}' status)"
+[[ "$(jq -c '.devices' <<<"$ignored")" == "$(jq -c '.devices' <<<"$status")" ]]
+for bad_rules in 'not json' '[]' '"mute"' "{\"abc123\":{\"app:$(head -c 100000 /dev/zero | tr '\0' 'A')\":\"mute\"}}"; do
+  if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --notify-rules "$bad_rules" status >/dev/null 2>&1; then
+    echo "malformed notification rules were accepted" >&2; exit 1
+  fi
+done
 jq -e --arg art "$art_dir/art.jpg" '.devices[0].media == {player: "Apple Music", title: "Overthinking", artist: "usedcvnt", album: "Ultraviolet", volume: 40, length: 144023, position: 94844, isPlaying: true, canSeek: true, albumArt: $art, players: ["Apple Music"]}' <<<"$status" >/dev/null
 jq -e '.devices[1].media == null' <<<"$status" >/dev/null
 jq -e --arg icon "$icon_dir/abc123" '.devices[0].notifications[0].iconPath == $icon and .devices[0].notifications[1].iconPath == ""' <<<"$status" >/dev/null
@@ -432,6 +505,12 @@ PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" dismiss abc123 notification
 : >"$temp_dir/busctl.log"
 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" dismiss-all abc123 >/dev/null
 [[ "$(grep -c '/notifications/notif\.' "$temp_dir/busctl.log")" == 3 ]]
+: >"$temp_dir/busctl.log"
+PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --notify-rules "$rules" dismiss-all abc123 >/dev/null
+[[ "$(grep -o '/notifications/notif\.[0-9]*' "$temp_dir/busctl.log" | sort | tr '\n' ' ')" == "/notifications/notif.1 /notifications/notif.2 /notifications/notif.3 " ]]
+: >"$temp_dir/busctl.log"
+PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --notify-rules "$rules" dismiss-all def456 >/dev/null
+[[ "$(grep -o '/notifications/notif\.[0-9]*' "$temp_dir/busctl.log" | sort | tr '\n' ' ')" == "/notifications/notif.1 /notifications/notif.2 /notifications/notif.4 " ]]
 contacts="$(XDG_DATA_HOME="$temp_dir/data" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" contacts abc123)"
 jq -e 'length == 1 and .[0].name == "Alex Rivera" and .[0].number == "+15550000001"' <<<"$contacts" >/dev/null
 long_name_contacts="$(XDG_DATA_HOME="$temp_dir/data-longname" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" contacts abc123)"
@@ -645,6 +724,15 @@ if grep -q 'Phone text\|Phone title\|<img\|<b>\|& Co' "$temp_dir/notify-send.log
 fi
 [[ "$(grep -c '^notify ' "$temp_dir/notify-send.log")" == 2 ]]
 grep -q 'ipc call omalink.phone.DP-9 open' "$temp_dir/qs.log"
+: >"$temp_dir/notify-send.log"
+# Popup workers receive the same rules: a muted app never pops up.
+muted_out="$(XDG_RUNTIME_DIR="$temp_dir" XDG_CONFIG_HOME="$temp_dir/xdg" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" \
+  --notify-rules '{"abc123":{"pkg:com.azure.authenticator":"mute"}}' watch)"
+[[ $muted_out == "$watch_out" ]]
+[[ "$(grep -c '^notify ' "$temp_dir/notify-send.log")" == 1 ]]
+if grep -q 'Authenticator' "$temp_dir/notify-send.log"; then
+  echo "a muted app reached a popup" >&2; exit 1
+fi
 : >"$temp_dir/notify-send.log"
 quiet_out="$(XDG_RUNTIME_DIR="$temp_dir" XDG_CONFIG_HOME="$temp_dir/xdg" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --popups off watch)"
 [[ $quiet_out == "$watch_out" ]]

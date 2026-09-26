@@ -45,19 +45,6 @@ assert.equal(model.mediaTime(65000), "1:05")
 assert.equal(model.mediaTime(0), "0:00")
 assert.equal(model.mediaTime(-500), "0:00")
 assert.equal(model.mediaTime(null), "0:00")
-assert.equal(model.visibleNotifications([
-  { appName: "Spotify", isConversation: false },
-  { appName: "Messages", isConversation: true }
-]).length, 1)
-const filterSamples = [
-  { appName: "Signal" },
-  { appName: "Messages" },
-  { appName: "Microsoft Authenticator" }
-]
-assert.equal(model.visibleNotifications(filterSamples, "signal").length, 1)
-assert.equal(model.visibleNotifications(filterSamples, "signal, authenticator").length, 2)
-assert.equal(model.visibleNotifications(filterSamples, "").length, 3)
-assert.equal(model.visibleNotifications(filterSamples, "  ").length, 3)
 const searchableConversations = [
   { names: ["Alex Rivera"], addresses: ["+15550000001"], preview: "Dinner tonight" },
   { names: ["Sam"], addresses: ["+15550000002"], preview: "Project update" }
@@ -211,10 +198,6 @@ assert.equal(model.conversationTitle({ addresses: ["Alex", "Sam"] }), "Alex +1")
 assert.equal(model.relativeTime(1000, 61000), "1m")
 
 
-// Package-only filters must survive the helper-to-panel boundary.
-assert.deepStrictEqual(model.visibleNotifications([
-  { appName: 'Localized name', packageName: 'com.example.messaging' }, null
-], 'com.example.messaging'), [{ appName: 'Localized name', packageName: 'com.example.messaging' }])
 assert.strictEqual(model.signalStrength({ connectivity: { strength: null } }), -1)
 const group = { threadId: 99, addresses: ['+15550000001', '+15550000002'], names: ['Group'] }
 const directSms = model.upsertConversationAfterSms([group], '+15550000001', 'Alex', 'Hello', 1000)

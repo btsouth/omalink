@@ -383,19 +383,30 @@ counts. It does not change backend reads, explicitly opened Messages or other
 applications. Popup control remains independent. Android hardware is available
 for eventual acceptance; no iPhone hardware is currently available.
 
-Per-app controls still require bounded metadata discovery before helper filtering,
-exact validated package identities (with clearly labeled app-name fallback), and
-endpoint-scoped overrides shared by status, popup workers and dismiss-all. Keep
-legacy source strings intact and invalidate in-flight reads on policy changes.
-The discovery view must disclose scan limits rather than imply an installed-app
-inventory.
+Per-app controls slice: the helper reads app name and package for up to 100
+records per device and content only for the first 25 permitted ones. Package
+identity requires the Android `user|package|id|` key envelope; anything else
+falls back to a name-only identity labeled as phone-controlled and non-unique.
+Exact Allow/Mute rules are stored per KDE endpoint key in `notifyAppRules` (at
+most 100 rules across 16 phones) and passed as one bounded `--notify-rules`
+argument to status, the watcher's popup workers and dismiss-all. Precedence is
+exact mute, exact allow, then the unchanged `notifyApps` string, in both the
+helper and `NotificationPolicy.js`. Policy changes discard in-flight status
+reads. The panel list shows current and ruled apps, explains filtered-empty and
+truncated lists, and follows Panel message content. Evidence: Node policy
+matrix, CLI discovery/parity/bounds tests, actual Panel/Service runtime tests in
+omabox and dark/light inspection at 1366x768. No Android hardware check yet.
 
-- [ ] List observed app identities with per-app enable/mute rather than requiring
+- [x] List observed app identities with per-app enable/mute rather than requiring
   substring editing. Preserve a compatible migration for existing filter strings.
 - [ ] Add filtered-empty explanations, temporary presentation mode and optional
   hidden panel contents. Keep notification popups content-free by default.
+  Filtered-empty explanations and hidden panel contents are implemented; a
+  temporary presentation mode is not.
 - [ ] Model per-provider/per-endpoint policy explicitly; prevent duplicate popup
   delivery without rewriting another application's configuration silently.
+  Per-endpoint KDE policy is implemented; duplicate KDE Connect popups are still
+  only documented.
 - [ ] Add safe notification actions only when the originating provider reports
   them; a messaging-app reply is not a full conversation-sync capability.
 

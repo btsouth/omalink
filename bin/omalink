@@ -6,7 +6,7 @@ kdeconnect_service=org.kde.kdeconnect
 original_args=("$@")
 
 usage() {
-  echo "Usage: omalink [--notify-apps \"App, Package\"] [--popups on|off] <status|diagnostics|watch|media|media-action|media-volume|media-seek|ring|clipboard|text-stdin|dismiss|dismiss-all|contacts|conversations|messages|attachment|attachment-open|attachment-save|seen|mark-seen> [arguments]" >&2
+  echo "Usage: omalink [--notify-apps \"App, Package\"] [--notify-rules JSON] [--popups on|off] <status|diagnostics|watch|media|media-action|media-volume|media-seek|ring|clipboard|text-stdin|dismiss|dismiss-all|contacts|conversations|messages|attachment|attachment-open|attachment-save|seen|mark-seen> [arguments]" >&2
   exit 2
 }
 
@@ -55,6 +55,9 @@ dbus_bounded() {
 # an app posting thousands of them must not be able to stall the bar.
 notifications_read_max=100
 notifications_max=25
+# Per-app rules arrive as one argument. The panel keeps them far below the
+# kernel's per-argument limit; this refuses anything larger.
+notify_rules_max_bytes=98304
 # Same idea for the lists the phone fills: the panel and the Messages window are
 # scrollable, so only the newest entries are worth carrying into the shell.
 threads_max=200
@@ -363,7 +366,7 @@ status_failure() {
 
 status() {
   local diagnostics="${1:-false}" version owner end_owner raw id name device_path paired reachable type
-  local charge charging network_strength network_type notifications media capabilities count=0 truncated=false
+  local charge charging network_strength network_type notification_state media capabilities count=0 truncated=false
   local -a devices=()
   local -A seen_devices=()
   if ! command -v kdeconnect-cli >/dev/null 2>&1; then
@@ -400,7 +403,8 @@ status() {
     paired="$(metadata_boolean "$device_path" isPaired)"
     reachable="$(metadata_boolean "$device_path" isReachable)"
     capabilities="$(capabilities_json "$device_path" "$paired" "$reachable")"
-    charge=null; charging=null; network_strength=null; network_type=''; notifications='[]'; media=null
+    charge=null; charging=null; network_strength=null; network_type=''; media=null
+    notification_state='{"notifications":[],"sources":null}'
     # Diagnostics only examines backend/device/plugin metadata. Never collect
     # notification bodies, contact records, media titles or cached content.
     if [[ $diagnostics == false && $paired == true && $reachable == true ]]; then
@@ -408,7 +412,7 @@ status() {
       charging="$(boolean_or "$(dbus_property "$device_path/battery" org.kde.kdeconnect.device.battery isCharging b)" null)"
       network_strength="$(numeric_or "$(dbus_property "$device_path/connectivity_report" org.kde.kdeconnect.device.connectivity_report cellularNetworkStrength i)" null)"
       network_type="$(dbus_property "$device_path/connectivity_report" org.kde.kdeconnect.device.connectivity_report cellularNetworkType s)"
-      notifications="$(notification_json "$device_path")"
+      notification_state="$(notification_json "$id")"
       media="$(media_json "$device_path")"
     fi
     devices+=("$(jq -cs --arg id "$id" --arg name "$name" --arg type "$type" \
@@ -419,7 +423,7 @@ status() {
         connectionState:(if $paired == false then "unpaired" elif $reachable == false then "offline"
           elif $paired == true and $reachable == true then "ready" else "unknown" end),capabilities:$capabilities,
         battery:{charge:$charge,charging:$charging},connectivity:{strength:$networkStrength,type:$networkType},
-        notifications:.[0],media:$media}' <<<"$notifications")")
+        notifications:.[0].notifications,notificationSources:.[0].sources,media:$media}' <<<"$notification_state")")
   done <<<"$raw"
   end_owner="$(backend_owner)"
   if [[ $end_owner != "$owner" ]]; then
@@ -438,22 +442,31 @@ status() {
         else . end),statusText:(if length == 0 then "No devices found" else "Device status refreshed" end)}'
 }
 
+# Reads at most notifications_read_max records per device. Metadata (app name
+# and package) is read for every scanned record so the panel can offer per-app
+# rules and explain filtered-empty lists, but a title, body, icon or reply ID is
+# only read for the first notifications_max records the policy permits.
 notification_json() {
-  local device_path="$1" notification_root="$1/notifications" raw notification_id notification_path
-  local app_name internal_id title text icon_path dismissable reply_id is_conversation
-  local -a notifications=()
-  local read_count=0 kept_count=0
+  local device_id="$1" notification_root="/modules/kdeconnect/devices/$1/notifications" raw notification_id notification_path
+  local app_name package_name title text icon_path dismissable reply_id is_conversation permitted source_allowed
+  local -a notifications=() observed=()
+  local read_count=0 kept_count=0 scan_truncated=false
 
   raw="$(dbus_bounded 5s busctl --user --json=short call -- "$kdeconnect_service" \
     "$notification_root" org.kde.kdeconnect.device.notifications activeNotifications)"
   while IFS= read -r notification_id; do
-    [[ $read_count -lt $notifications_read_max && $kept_count -lt $notifications_max ]] || break
+    if (( read_count >= notifications_read_max )); then scan_truncated=true; break; fi
     read_count=$((read_count + 1))
     [[ $notification_id =~ ^[A-Za-z0-9_][A-Za-z0-9._:-]{0,127}$ ]] || continue
     notification_path="$notification_root/$notification_id"
     app_name="$(truncate_text "$(dbus_json_property "$notification_path" appName)" "$name_max_chars")"
-    internal_id="$(truncate_text "$(dbus_json_property "$notification_path" internalId)" "$name_max_chars")"
-    notification_allowed "$app_name" "$internal_id" || continue
+    package_name="$(notification_package "$(truncate_text "$(dbus_json_property "$notification_path" internalId)" "$name_max_chars")")"
+    source_allowed=false
+    notification_allowed "$app_name" "$package_name" && source_allowed=true
+    permitted=false
+    notification_permitted "$device_id" "$app_name" "$package_name" && permitted=true
+    observed+=("$app_name" "$package_name" "$permitted" "$source_allowed")
+    [[ $permitted == true && $kept_count -lt $notifications_max ]] || continue
     kept_count=$((kept_count + 1))
     title="$(truncate_text "$(dbus_json_property "$notification_path" title)" "$title_max_chars")"
     text="$(truncate_text "$(dbus_json_property "$notification_path" text)" "$body_max_chars")"
@@ -464,7 +477,7 @@ notification_json() {
     notifications+=("$(jq -cn \
       --arg id "$notification_id" \
       --arg appName "$app_name" \
-      --arg packageName "$(cut -d '|' -f 2 <<<"$internal_id")" \
+      --arg packageName "$package_name" \
       --arg title "$title" \
       --arg text "$text" \
       --arg iconPath "$icon_path" \
@@ -474,17 +487,76 @@ notification_json() {
       '{id: $id, appName: $appName, packageName: $packageName, title: $title, text: $text, iconPath: $iconPath, dismissable: $dismissable, replyId: $replyId, replyable: ($replyId != ""), isConversation: $isConversation}')")
   done < <(jq -r '.data[0][]?' <<<"$raw" 2>/dev/null)
 
-  if (( ${#notifications[@]} == 0 )); then
-    printf '%s\n' '[]'
-  else
-    printf '%s\n' "${notifications[@]}" | jq -sc '.'
+  # Bodies travel on stdin because 25 of them can exceed one argument's limit.
+  # Observed metadata is at most four short fields per scanned record. jq still
+  # parses option-like arguments after --args, so -- ends its options first.
+  { (( ${#notifications[@]} == 0 )) || printf '%s\n' "${notifications[@]}"; } \
+    | jq -sc --argjson scanTruncated "$scan_truncated" '
+      . as $notifications
+      | [$ARGS.positional as $fields | range(0; $fields | length; 4) | $fields[.:. + 4]
+          | {appName: .[0], packageName: .[1], permitted: (.[2] == "true"), sourceAllowed: (.[3] == "true")}
+          | .key = (if .packageName != "" then "pkg:" + .packageName
+              elif .appName != "" then "app:" + .appName else "" end)] as $records
+      | {notifications: $notifications, sources: {
+          examined: ($records | length), scanTruncated: $scanTruncated,
+          permitted: ([$records[] | select(.permitted)] | length),
+          hidden: ([$records[] | select(.permitted | not)] | length),
+          listed: ($notifications | length),
+          unidentified: ([$records[] | select(.key == "")] | length),
+          apps: ([$records[] | select(.key != "")] | group_by(.key)
+            | map({key: .[0].key, appName: .[0].appName, packageName: .[0].packageName, count: length,
+                permitted: any(.[]; .permitted), sourceAllowed: any(.[]; .sourceAllowed)})
+            | sort_by(.appName | ascii_downcase))}}' --args -- "${observed[@]}"
+}
+
+# KDE Connect reports an Android notification's StatusBarNotification key,
+# "user|package|id|tag|uid", as its internalId. Only that envelope yields a
+# package identity. KDE Connect's own numeric IDs and anything malformed yield
+# none, rather than treating the whole value as a package. Bracket ranges match
+# non-ASCII letters in some locales, so the characters are listed exactly.
+notification_package() {
+  local internal_id="${1:-}" letter='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ' digit='0123456789'
+  local segment="[$letter][$letter${digit}_]*"
+  if [[ $internal_id =~ ^-?[$digit]{1,10}\|($segment(\.$segment)*)\|-?[$digit]{1,10}\| ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
   fi
 }
 
+# Per-app rules from the panel, scoped to one KDE device each. Only an exact
+# identity matches: "pkg:<package>" for a validated package, otherwise
+# "app:<name>", which the phone chooses and other apps may share.
+declare -A notify_rules=()
+load_notify_rules() {
+  local device identity state
+  [[ -n $NOTIFY_RULES_SET ]] || return 0
+  (( $(printf '%s' "$NOTIFY_RULES" | wc -c) <= notify_rules_max_bytes )) || usage
+  jq -e 'type == "object"' <<<"$NOTIFY_RULES" >/dev/null 2>&1 || usage
+  while IFS= read -r -d '' device && IFS= read -r -d '' identity && IFS= read -r -d '' state; do
+    notify_rules["$device|$identity"]="$state"
+  done < <(jq -j '
+    to_entries[:16][] | select(.key | test("^[A-Za-z0-9]{1,128}$")) | .key as $device
+    | .value | objects | to_entries[:100][]
+    | select((.value == "allow" or .value == "mute") and (.key | length <= 260)
+        and (.key | test("^(pkg|app):.")) and (.key | explode | all(. > 31 and . != 127)))
+    | "\($device)\u0000\(.key)\u0000\(.value)\u0000"' <<<"$NOTIFY_RULES")
+}
+
+# Exact mute, then exact allow, then the legacy source filter. Used by status,
+# popup workers and dismiss-all alike, so none of them can disagree.
+notification_permitted() {
+  local device_id="$1" app_name="$2" package_name="$3" rule=""
+  if [[ -n $package_name ]]; then
+    rule="${notify_rules["$device_id|pkg:$package_name"]:-}"
+  elif [[ -n $app_name ]]; then
+    rule="${notify_rules["$device_id|app:$app_name"]:-}"
+  fi
+  [[ $rule != mute ]] || return 1
+  [[ $rule != allow ]] || return 0
+  notification_allowed "$app_name" "$package_name"
+}
+
 notification_allowed() {
-  local app_name="${1,,}" internal_id="${2:-}" package_name="" term
-  IFS='|' read -r _ package_name _ <<<"$internal_id"
-  package_name="${package_name,,}"
+  local app_name="${1,,}" package_name="${2,,}" term
 
   # --notify-apps wins when given, including an empty list (allow everything).
   if [[ -n $NOTIFY_APPS_SET ]]; then
@@ -660,7 +732,7 @@ notify_escape() {
 }
 
 handle_posted() {
-  local device_id="$1" notification_id="$2" notification_path app_name internal_id title text silent summary body action
+  local device_id="$1" notification_id="$2" notification_path app_name package_name title text silent summary body action
   [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ && $notification_id =~ ^[A-Za-z0-9_][A-Za-z0-9._:-]{0,127}$ ]] || return 0
   sleep 0.3
   notification_path="/modules/kdeconnect/devices/$device_id/notifications/$notification_id"
@@ -670,8 +742,8 @@ handle_posted() {
   [[ $silent == true ]] && return 0
   [[ $NOTIFY_POPUPS == off ]] && return 0
   app_name="$(truncate_text "$(dbus_json_property "$notification_path" appName)" "$name_max_chars")"
-  internal_id="$(truncate_text "$(dbus_json_property "$notification_path" internalId)" "$name_max_chars")"
-  notification_allowed "$app_name" "$internal_id" || return 0
+  package_name="$(notification_package "$(truncate_text "$(dbus_json_property "$notification_path" internalId)" "$name_max_chars")")"
+  notification_permitted "$device_id" "$app_name" "$package_name" || return 0
   title="$(truncate_text "$(dbus_json_property "$notification_path" title)" "$title_max_chars")"
   text="$(truncate_text "$(dbus_json_property "$notification_path" text)" "$body_max_chars")"
   # A notification dismissed between the signal and this read has no fields
@@ -740,6 +812,7 @@ watch() {
   trap 'exit 130' INT
   trap 'exit 143' TERM HUP
   [[ -z $NOTIFY_APPS_SET ]] || options+=(--notify-apps "$NOTIFY_APPS")
+  [[ -z $NOTIFY_RULES_SET ]] || options+=(--notify-rules "$NOTIFY_RULES")
   mkfifo "$work/signals"
   setsid timeout --kill-after=1s 1h dbus-monitor --session \
     "type='signal',sender='org.kde.kdeconnect',interface='org.kde.kdeconnect.device.notifications',member='notificationPosted'" \
@@ -776,7 +849,7 @@ watch() {
 }
 
 dismiss_all_notifications() {
-  local device_id="${1:-}" notification_root raw notification_id notification_path app_name internal_id
+  local device_id="${1:-}" notification_root raw notification_id notification_path app_name package_name
   [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ ]] || usage
   local read_count=0
   notification_root="/modules/kdeconnect/devices/$device_id/notifications"
@@ -788,8 +861,8 @@ dismiss_all_notifications() {
     [[ $notification_id =~ ^[A-Za-z0-9_][A-Za-z0-9._:-]{0,127}$ ]] || continue
     notification_path="$notification_root/$notification_id"
     app_name="$(truncate_text "$(dbus_json_property "$notification_path" appName)" "$name_max_chars")"
-    internal_id="$(truncate_text "$(dbus_json_property "$notification_path" internalId)" "$name_max_chars")"
-    notification_allowed "$app_name" "$internal_id" || continue
+    package_name="$(notification_package "$(truncate_text "$(dbus_json_property "$notification_path" internalId)" "$name_max_chars")")"
+    notification_permitted "$device_id" "$app_name" "$package_name" || continue
     timeout --kill-after=1s 10s busctl --user call -- "$kdeconnect_service" "$notification_path" \
       org.kde.kdeconnect.device.notifications.notification dismiss >/dev/null 2>&1 || true
   done < <(jq -r '.data[0][]?' <<<"$raw" 2>/dev/null)
@@ -1189,10 +1262,13 @@ mark_seen() {
 
 NOTIFY_APPS_SET=""
 NOTIFY_APPS=""
+NOTIFY_RULES_SET=""
+NOTIFY_RULES=""
 NOTIFY_POPUPS="on"
 while (( $# > 0 )); do
   case $1 in
     --notify-apps) (( $# >= 2 )) || usage; NOTIFY_APPS_SET=1; NOTIFY_APPS="$2"; shift 2 ;;
+    --notify-rules) (( $# >= 2 )) || usage; NOTIFY_RULES_SET=1; NOTIFY_RULES="$2"; shift 2 ;;
     --popups) (( $# >= 2 )) || usage; NOTIFY_POPUPS="$2"; shift 2 ;;
     --) shift; break ;;
     -*) usage ;;
@@ -1211,6 +1287,7 @@ if [[ ${OMALINK_TIMED:-} != 1 ]]; then
       ;;
   esac
 fi
+load_notify_rules
 
 case "${1:-}" in
   status) status ;;
