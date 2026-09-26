@@ -39,6 +39,7 @@ print(json.dumps({"version":1,"ok":True,"state":"accepted","code":"accepted"}))
 PY_HELPER
 chmod +x "$work/bin/omalink"
 cp "$project_dir/tests/selection-runtime.qml" "$work/shell.qml"
+if [[ -n ${OMALINK_PREVIEW:-} ]]; then qs -p "$work"; exit; fi
 timeout --kill-after=2s 20s qs -p "$work" >"$work/log" 2>&1 || { cat "$work/log"; exit 1; }
 cat "$work/log"
 grep -q 'omalink selection runtime tests passed' "$work/log"

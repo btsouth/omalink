@@ -2,6 +2,9 @@
 
 ## 0.3.0 - Unreleased
 
+- Add a panel content setting that hides message previews and notification rows,
+  clears pending notification replies, and preserves counts and source filters.
+
 - Add opt-in experimental BlueFerry local history and cached contact viewing.
   Require API 2, an existing backend owner and readable storage. Keep this route
   separate from KDE Connect, with no sending, read acknowledgements or setup
