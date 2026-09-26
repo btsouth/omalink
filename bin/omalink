@@ -3,8 +3,11 @@
 set -euo pipefail
 umask 077
 # Phone text is UTF-8. A fixed locale keeps truncation, case folding and regex
-# ranges the same on every system and identical to NotificationPolicy.js.
-export LC_ALL=C.UTF-8
+# ranges the same on every system and identical to NotificationPolicy.js. It is
+# not exported, and an app opened for the user gets the user's value back.
+original_lc_all_set="${LC_ALL+1}"
+original_lc_all="${LC_ALL-}"
+LC_ALL=C.UTF-8
 kdeconnect_service=org.kde.kdeconnect
 original_args=("$@")
 
@@ -1221,7 +1224,11 @@ open_attachment() {
   }
   # Detached: the default application outlives this helper, and the panel must
   # not wait for it to close.
-  setsid xdg-open "$path" >/dev/null 2>&1 </dev/null &
+  if [[ -n $original_lc_all_set ]]; then
+    LC_ALL="$original_lc_all" setsid xdg-open "$path" >/dev/null 2>&1 </dev/null &
+  else
+    setsid xdg-open "$path" >/dev/null 2>&1 </dev/null &
+  fi
   disown 2>/dev/null || true
 }
 

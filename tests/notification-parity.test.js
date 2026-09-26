@@ -18,10 +18,23 @@ function extract(name) {
 const functions = ["notification_package", "load_notify_rules", "notification_permitted", "notification_allowed"]
   .map(extract).join("\n")
 const limit = helper.match(/^notify_rules_max_bytes=\d+$/m)[0]
+// The helper's own locale line, so removing it fails this test.
+const locale = helper.match(/^LC_ALL=C\.UTF-8$/m)
+assert.ok(locale, "bin/omalink no longer fixes its locale")
+
+// The built-in source lists must be the same entries on both sides.
+const allowed = extract("notification_allowed")
+function caseList(variable) {
+  const match = allowed.match(new RegExp('case "\\$' + variable + '" in\\n\\s*([^)]*)\\)'))
+  assert.ok(match, "built-in list missing: " + variable)
+  return match[1].split("|").map((entry) => entry.replace(/\\ /g, " "))
+}
+assert.deepEqual(caseList("package_name"), policy.builtinPackages)
+assert.deepEqual(caseList("app_name"), policy.builtinApps)
 
 // Arguments: device app package, repeated. Prints one 1/0 per notification.
 const script = `set -euo pipefail
-export LC_ALL=C.UTF-8
+${locale[0]}
 usage() { exit 2; }
 ${limit}
 declare -A notify_rules=()
@@ -53,7 +66,9 @@ const notifications = [
   { appName: "", packageName: "com.example.nameless" },
   { appName: "", packageName: "" },
   { appName: "-h", packageName: "" },
-  { appName: "Tab\tName", packageName: "" }
+  { appName: "Tab\tName", packageName: "" },
+  ...policy.builtinPackages.map((packageName) => ({ appName: "Localized", packageName })),
+  ...policy.builtinApps.map((appName) => ({ appName: appName.toUpperCase(), packageName: "" }))
 ]
 const sources = [undefined, "", "  \t", "　", " ", ",", " , ,", "messages, signal", "SIGNAL",
   "com.whatsapp", "instagram", "σας", "ärzte", "i̇nstagram", "chat app", "chat app", "nomatch\nsignal",

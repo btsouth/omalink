@@ -65,8 +65,8 @@ Item {
 
   // A status read started under the old policy may still list a record the
   // new policy hides. Its result is discarded and read again. Quickshell may
-  // report a run's output and exit in either order, so a new run waits for
-  // both (or briefly for output that never arrives) before replacing it.
+  // report a run's output and exit in either order, so after an exit a new run
+  // waits briefly for that output. A process that never started blocks nothing.
   property int statusGeneration: 0
   property bool statusOutputPending: false
   function notificationPolicyChanged() {
@@ -163,7 +163,7 @@ Item {
   }
 
   function refresh() {
-    if (statusProcess.running || statusOutputPending) return
+    if (statusProcess.running || statusOutputWait.running) return
     refreshing = true
     statusOutputPending = true
     statusProcess.generation = statusGeneration

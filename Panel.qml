@@ -29,7 +29,8 @@ Panel {
   readonly property var notificationSources: notificationsReady
     ? NotificationPolicy.normalizeSources(phone.selectedDevice.notificationSources) : null
   readonly property var notificationAppRows: notificationsReady ? NotificationPolicy.appRows(notificationSources, activePhoneRules) : []
-  readonly property var notificationSummary: NotificationPolicy.summaryLines(notificationSources, notifications.length, !panelContentHidden)
+  readonly property var notificationSummary: NotificationPolicy.summaryLines(notificationSources, notifications.length,
+    !panelContentHidden && notifications.length > 0)
   readonly property bool notificationSectionVisible: notifications.length > 0 || notificationAppRows.length > 0
     || (notificationSources !== null && notificationSources.examined > 0)
   property bool showNotificationApps: false

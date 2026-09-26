@@ -304,7 +304,8 @@ function summaryLines(sources, visibleCount, clearAvailable) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = {ruleLimit: ruleLimit, phoneLimit: phoneLimit, validPackageName: validPackageName,
+  module.exports = {ruleLimit: ruleLimit, phoneLimit: phoneLimit, builtinPackages: builtinPackages,
+    builtinApps: builtinApps, validPackageName: validPackageName,
     validIdentity: validIdentity, identity: identity, kdeDeviceId: kdeDeviceId,
     normalizeRules: normalizeRules, phoneRules: phoneRules, ruleState: ruleState, withRule: withRule,
     withoutPhone: withoutPhone, helperArgument: helperArgument, visibleNotifications: visibleNotifications,

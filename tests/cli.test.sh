@@ -256,6 +256,7 @@ chmod +x "$temp_dir/qs"
 cat >"$temp_dir/xdg-open" <<'EOF'
 #!/usr/bin/env bash
 echo "open $*" >>"$0.log"
+echo "locale ${LC_ALL-unset}" >>"$0.log"
 EOF
 chmod +x "$temp_dir/xdg-open"
 
@@ -614,9 +615,15 @@ printf '<html><body>x</body></html>' >"$cache_root/param.html"
 printf '#!/bin/sh\necho BOOM\n' >"$cache_root/unreadable.bin"
 chmod 000 "$cache_root/unreadable.bin"
 : >"$temp_dir/xdg-open.log"
-PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment-open "$cache_root/photo.jpg"
+env -u LC_ALL PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment-open "$cache_root/photo.jpg"
 sleep 0.3
 grep -q "open $cache_root/photo.jpg" "$temp_dir/xdg-open.log"
+# The helper's fixed locale never reaches the application the user opens.
+grep -qx "locale unset" "$temp_dir/xdg-open.log"
+: >"$temp_dir/xdg-open.log"
+LC_ALL=en_US.UTF-8 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment-open "$cache_root/photo.jpg"
+sleep 0.3
+grep -qx "locale en_US.UTF-8" "$temp_dir/xdg-open.log"
 for refused in "$cache_root/disguised.jpg" "$cache_root/evil.desktop" "$cache_root/evil.sh" "$cache_root/unreadable.bin" "$cache_root/page.html" "$cache_root/lower.bin" "$cache_root/xmlpage.txt" "$cache_root/scanpage.txt" "$cache_root/param.html" "$cache_root/shortcut.url" "$art_dir/evil.svg" "$temp_dir/outside.png"; do
   if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment-open "$refused" >/dev/null 2>&1; then
     echo "opening $refused was accepted" >&2

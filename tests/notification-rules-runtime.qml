@@ -210,6 +210,17 @@ ShellRoot {
       } else if (test.step === 7) {
         if (test.phone.refreshing) return
         test.check(test.apps(panel.notifications) === "Messages", "reset did not restore the source filter")
+        // A status process that cannot start must not block later reads.
+        Quickshell.execDetached(["chmod", "-x", test.work + "/bin/omalink"])
+      } else if (test.step === 8) {
+        test.allowedAt = test.phone.lastSuccessAt
+        test.phone.refresh()
+      } else if (test.step === 9) {
+        Quickshell.execDetached(["chmod", "+x", test.work + "/bin/omalink"])
+      } else if (test.step === 10) {
+        test.phone.refresh()
+      } else if (test.step === 11) {
+        if (test.phone.lastSuccessAt <= test.allowedAt) return
         console.log("omalink notification rules runtime tests passed")
         Qt.quit()
       }
