@@ -123,42 +123,41 @@ Item {
   ColumnLayout {
     id: content
     width: root.width
-    spacing: 6
-    Text {
-      Layout.fillWidth: true
-      text: qsTr("Share files")
-      textFormat: Text.PlainText
-      color: root.foreground
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.bodySmall
-      font.bold: true
-    }
+    spacing: Style.space(6)
     Text {
       Layout.fillWidth: true
       text: root.destinationId !== "" && root.selectedPaths.length ? qsTr("To %1 · %2 files").arg(root.destinationName).arg(root.selectedPaths.length)
-        : root.canShare ? qsTr("Choose files for %1").arg(String(root.deviceName || root.deviceId).slice(0, 256)) : qsTr("Connect a phone with file sharing enabled")
+        : root.canShare ? qsTr("To %1").arg(String(root.deviceName || root.deviceId).slice(0, 256)) : qsTr("Connect a phone with file sharing enabled")
       textFormat: Text.PlainText
-      color: root.foreground
+      color: Qt.darker(root.foreground, 1.55)
       font.family: root.fontFamily
-      font.pixelSize: Style.font.bodySmall
+      font.pixelSize: Style.font.caption
       wrapMode: Text.Wrap
     }
     Controls.ScrollView {
       visible: root.selectedPaths.length > 0
       Layout.fillWidth: true
-      Layout.preferredHeight: Math.min(150, fileList.implicitHeight)
+      Layout.preferredHeight: Math.min(Style.space(150), fileList.implicitHeight)
       clip: true
       contentWidth: availableWidth
       ColumnLayout {
         id: fileList
         width: parent.width
-        spacing: 2
+        spacing: Style.space(2)
         Repeater {
           model: root.selectedPaths
           RowLayout {
             required property string modelData
             required property int index
             Layout.fillWidth: true
+            spacing: Style.space(8)
+            Text {
+              text: "󰈔"
+              textFormat: Text.PlainText
+              color: Qt.darker(root.foreground, 1.55)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
             Text {
               Layout.fillWidth: true
               text: modelData
@@ -168,11 +167,15 @@ Item {
               font.pixelSize: Style.font.bodySmall
               elide: Text.ElideMiddle
             }
-            Button {
-              text: qsTr("Remove")
+            PanelActionButton {
+              iconText: "󰅖"
+              tooltipText: qsTr("Remove")
+              Accessible.role: Accessible.Button
               Accessible.name: qsTr("Remove %1").arg(modelData)
               focusable: true
               enabled: !root.sending
+              foreground: root.foreground
+              fontFamily: root.fontFamily
               onClicked: root.removeFile(index)
             }
           }
@@ -180,10 +183,16 @@ Item {
       }
     }
     RowLayout {
+      spacing: Style.space(8)
       Button {
-        text: qsTr("Choose files")
+        iconText: "󰉋"
+        text: root.selectedPaths.length > 0 ? qsTr("Change") : qsTr("Choose files")
+        bordered: true
         focusable: true
         enabled: root.canShare && !root.sending
+        opacity: enabled ? 1.0 : 0.5
+        foreground: root.foreground
+        fontFamily: root.fontFamily
         onClicked: root.openPicker()
       }
       Button {
@@ -191,13 +200,21 @@ Item {
         focusable: true
         visible: root.selectedPaths.length > 0
         enabled: !root.sending
+        foreground: root.foreground
+        fontFamily: root.fontFamily
         onClicked: root.invalidateSelection()
       }
+      Item { Layout.fillWidth: true }
       Button {
+        iconText: "󰒊"
         text: qsTr("Send files")
+        bordered: true
         focusable: true
         visible: root.selectedPaths.length > 0
         enabled: root.canShare && !root.sending && root.destinationId === root.deviceId
+        opacity: enabled ? 1.0 : 0.5
+        foreground: root.foreground
+        fontFamily: root.fontFamily
         onClicked: root.submit()
       }
     }
@@ -208,7 +225,7 @@ Item {
       textFormat: Text.PlainText
       color: root.foreground
       font.family: root.fontFamily
-      font.pixelSize: Style.font.bodySmall
+      font.pixelSize: Style.font.caption
       wrapMode: Text.Wrap
       Accessible.role: Accessible.StaticText
       Accessible.name: text
@@ -217,10 +234,9 @@ Item {
       Layout.fillWidth: true
       text: qsTr("Up to 32 files and 8 GiB. Check KDE Connect and your phone for transfer results.")
       textFormat: Text.PlainText
-      color: root.foreground
-      opacity: 0.7
+      color: Qt.darker(root.foreground, 1.55)
       font.family: root.fontFamily
-      font.pixelSize: Style.font.bodySmall
+      font.pixelSize: Style.font.caption
       wrapMode: Text.Wrap
     }
   }

@@ -20,6 +20,7 @@ Panel {
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color dim: Qt.darker(foreground, 1.55)
+  readonly property color muted: Qt.darker(foreground, 1.4)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property color iconColor: phone.connected ? foreground : dim
   readonly property bool notificationsReady: phone.canUseCapability(activePhoneId, "notifications") && !!phone.selectedDevice
@@ -60,6 +61,42 @@ Panel {
   property bool showCapabilities: false
   property bool showFiles: false
   readonly property bool blueFerryEnabled: String(settings.blueFerryHistory || "Off") === "On"
+  // The phone list only matters when there is a choice to make.
+  readonly property bool showPhoneList: phone.devices.length > 1
+    || (phone.devices.length === 1 && phone.devices[0].id !== activePhoneId)
+  readonly property string heroTitle: activePhoneId !== "" ? phone.selectedDeviceName : "OmaLink"
+  readonly property string heroMeta: {
+    if (!phone.statusReady) return qsTr("Checking…")
+    if (phone.statusFailed) return qsTr("Status unavailable")
+    if (!phone.installed) return qsTr("KDE Connect not installed")
+    if (phone.stale) return qsTr("Status outdated")
+    if (activePhoneId === "") return phone.devices.length > 0 ? qsTr("Choose a phone") : qsTr("No phone connected")
+    var device = phone.selectedDevice
+    if (!activePhoneReady || !device) return phone.connectionText(device)
+    var parts = [qsTr("Connected")]
+    if (device.battery && device.battery.charge !== null && device.battery.charge !== undefined)
+      parts.push(Model.batteryText(device))
+    if (Model.connectivityText(device) !== "") parts.push(Model.connectivityText(device))
+    return parts.join(" · ")
+  }
+
+  function toggleShareText() {
+    if (shareDeviceId !== "") {
+      shareDeviceId = ""
+      return
+    }
+    if (!phone.canUseCapability(activePhoneId, "sharing")) return
+    showFiles = false
+    shareDeviceId = activePhoneId
+    shareDeviceName = phone.selectedDeviceName
+    shareField.text = ""
+    Qt.callLater(function() { shareField.forceActiveFocus() })
+  }
+
+  function toggleFiles() {
+    showFiles = !showFiles
+    if (showFiles) shareDeviceId = ""
+  }
 
   function openBlueFerryHistory(endpoint, backendOwner) {
     if (!blueFerryEnabled || !blueFerry.canReadHistory || backendOwner !== blueFerry.backendOwner) return
@@ -343,8 +380,8 @@ Panel {
     bar: root.bar
     // Let the native picker receive pointer and keyboard input above the layer panel.
     open: root.opened && !fileShare.pickerVisible
-    contentWidth: panel.fittedContentWidth(Style.space(340))
-    contentHeight: panel.fittedContentHeight(content.implicitHeight, Style.space(480))
+    contentWidth: panel.fittedContentWidth(Style.space(360))
+    contentHeight: panel.fittedContentHeight(content.implicitHeight, Style.space(900))
 
     Controls.ScrollView {
       id: scrollArea
@@ -364,45 +401,121 @@ Panel {
         id: content
         width: scrollArea.availableWidth
         spacing: Style.space(12)
-  
-        PanelHero {
+
+        // The selected phone is the subject of the panel, so it is the hero.
+        Item {
+          id: hero
           Layout.fillWidth: true
-          title: "OmaLink"
-          meta: phone.actionStatus !== "" ? phone.actionStatus : phone.statusText
-          foreground: root.foreground
-          fontFamily: root.fontFamily
-          iconOpacity: phone.connected ? 1.0 : 0.55
-          iconComponent: Component {
+          implicitHeight: Math.max(heroIcon.implicitHeight, heroLabels.implicitHeight, ringButton.implicitHeight)
+
+          Text {
+            id: heroIcon
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            text: "󰄜"
+            textFormat: Text.PlainText
+            color: root.foreground
+            opacity: root.activePhoneReady ? 1.0 : 0.5
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.display
+          }
+
+          Column {
+            id: heroLabels
+            anchors.left: heroIcon.right
+            anchors.leftMargin: Style.space(14)
+            anchors.right: ringButton.visible ? ringButton.left : parent.right
+            anchors.rightMargin: ringButton.visible ? Style.space(12) : 0
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: Style.space(2)
+
             Text {
-              text: "󰄜"
+              width: parent.width
+              text: root.heroTitle
+              textFormat: Text.PlainText
               color: root.foreground
               font.family: root.fontFamily
-              font.pixelSize: Style.font.display
+              font.pixelSize: Style.font.title
+              font.bold: true
+              elide: Text.ElideRight
+            }
+
+            Row {
+              width: parent.width
+              spacing: Style.space(6)
+
+              Text {
+                id: heroMetaText
+                width: Math.min(implicitWidth, parent.width - (heroSignal.visible ? heroSignal.width + parent.spacing : 0))
+                text: root.heroMeta.toUpperCase()
+                textFormat: Text.PlainText
+                color: root.muted
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                font.letterSpacing: 1.2
+                elide: Text.ElideRight
+              }
+
+              SignalBars {
+                id: heroSignal
+                visible: root.activePhoneReady && strength >= 0
+                anchors.verticalCenter: heroMetaText.verticalCenter
+                width: Style.space(14)
+                height: Style.space(10)
+                strength: Model.signalStrength(phone.selectedDevice)
+                activeColor: root.muted
+              }
             }
           }
+
+          PanelActionButton {
+            id: ringButton
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            visible: root.activePhoneId !== "" && phone.installed
+            iconText: "󰏲"
+            tooltipText: enabled ? qsTr("Ring phone") : phone.capabilityText(root.activePhoneId, "ring")
+            enabled: phone.canUseCapability(root.activePhoneId, "ring") && !phone.actionBusy
+            focusable: true
+            bordered: true
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            Accessible.role: Accessible.Button
+            Accessible.name: qsTr("Ring %1").arg(phone.selectedDeviceName)
+            onClicked: phone.ring(root.activePhoneId)
+          }
         }
-  
-        BlueFerryCard {
+
+        Text {
+          visible: phone.actionStatus !== ""
           Layout.fillWidth: true
-          visible: root.blueFerryEnabled
-          service: blueFerry
-          onOpenHistory: function(endpoint, backendOwner) { root.openBlueFerryHistory(endpoint, backendOwner) }
+          text: phone.actionStatus
+          textFormat: Text.PlainText
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.Wrap
+          Accessible.role: Accessible.StaticText
+          Accessible.name: text
         }
 
         Text {
           visible: phone.statusReady && !phone.installed && !phone.statusFailed
           Layout.fillWidth: true
-          text: "Install kdeconnect, jq and python-dbus, then open pairing to connect your phone."
+          text: qsTr("Install kdeconnect, jq and python-dbus, then open pairing to connect your phone.")
+          textFormat: Text.PlainText
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall
           wrapMode: Text.Wrap
         }
-  
+
         Text {
           visible: phone.installed && !phone.statusFailed && phone.devices.length === 0 && root.activePhoneId === ""
           Layout.fillWidth: true
-          text: qsTr("Open KDE Connect on your Android phone or iPhone, then open pairing. Keep the iPhone app open during setup. KDE Connect messaging requires Android. Optional BlueFerry history is available separately in widget settings.")
+          text: qsTr("Open KDE Connect on your Android phone or iPhone, then open pairing. Keep the iPhone app open during setup. KDE Connect messaging requires Android.")
+          textFormat: Text.PlainText
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall
@@ -422,488 +535,109 @@ Panel {
 
         Button {
           visible: phone.statusFailed || (root.activePhoneId !== "" && !root.activePhoneReady)
-          text: qsTr("Refresh connection")
+          text: phone.refreshing ? qsTr("Refreshing…") : qsTr("Refresh connection")
+          iconText: "󰑐"
           enabled: !phone.refreshing
+          opacity: enabled ? 1.0 : 0.5
+          bordered: true
           focusable: true
+          foreground: root.foreground
+          fontFamily: root.fontFamily
           Accessible.role: Accessible.Button
           Accessible.name: text
           onClicked: phone.refresh()
         }
-  
-        Text {
-          Layout.fillWidth: true
-          text: phone.freshnessText + (phone.backendVersion !== "" ? " · KDE Connect " + phone.backendVersion : "")
-          textFormat: Text.PlainText
-          color: root.dim
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-          wrapMode: Text.Wrap
-        }
-
-        Text {
-          visible: phone.discoveryTruncated
-          Layout.fillWidth: true
-          text: qsTr("Showing up to 8 devices. Open Manage devices to see all devices.")
-          color: root.dim
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-          wrapMode: Text.Wrap
-        }
-
-        Repeater {
-          model: phone.devices
-  
-          Rectangle {
-            required property var modelData
-            Layout.fillWidth: true
-            implicitHeight: deviceColumn.implicitHeight + Style.space(16)
-            color: Style.selectedFillFor(root.foreground, Color.accent)
-            radius: Style.cornerRadius
-  
-            ColumnLayout {
-              id: deviceColumn
-              anchors.fill: parent
-              anchors.margins: Style.space(8)
-              spacing: Style.space(10)
-
-              Button {
-                Layout.fillWidth: true
-                text: root.activePhoneId === modelData.id ? qsTr("Selected phone") : qsTr("Use this phone")
-                selected: root.activePhoneId === modelData.id
-                enabled: phone.canSelectDevice(modelData.id)
-                focusable: true
-                Accessible.role: Accessible.Button
-                Accessible.name: qsTr("Use %1 for messages and notifications").arg(modelData.name)
-                onClicked: root.selectDevice(modelData.id)
-              }
-  
-              RowLayout {
-                id: deviceRow
-                Layout.fillWidth: true
-                spacing: Style.space(8)
-    
-                Text {
-                  text: "󰄜"
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.title
-                }
-    
-                ColumnLayout {
-                  Layout.fillWidth: true
-                  spacing: 0
-    
-                  Text {
-                    text: modelData.name
-                    Layout.fillWidth: true
-                    elide: Text.ElideRight
-                    textFormat: Text.PlainText
-                    color: root.foreground
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
-                    font.bold: true
-                  }
-    
-                  Text {
-                    text: phone.canUseDevice(modelData.id) ? Model.batteryText(modelData) : phone.connectionText(modelData)
-                    textFormat: Text.PlainText
-                    color: root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                  }
-    
-                  RowLayout {
-                    visible: Model.connectivityText(modelData) !== "" || Model.signalStrength(modelData) >= 0
-                    spacing: Style.space(5)
-    
-                    Text {
-                      visible: text !== ""
-                      text: Model.connectivityText(modelData)
-                      textFormat: Text.PlainText
-                      color: root.dim
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
-                    }
-    
-                    SignalBars {
-                      visible: strength >= 0
-                      strength: Model.signalStrength(modelData)
-                      activeColor: root.foreground
-                    }
-                  }
-                }
-    
-                Button {
-                  iconText: "󰅌"
-                  tooltipText: phone.canUseCapability(modelData.id, "clipboard") ? qsTr("Send clipboard") : phone.capabilityText(modelData.id, "clipboard")
-                  enabled: phone.canUseCapability(modelData.id, "clipboard")
-                  foreground: root.foreground
-                  fontFamily: root.fontFamily
-                  bordered: true
-                  onClicked: phone.sendClipboard(modelData.id)
-                }
-    
-                Button {
-                  iconText: "󰌷"
-                  tooltipText: phone.canUseCapability(modelData.id, "sharing") ? qsTr("Send text or link") : phone.capabilityText(modelData.id, "sharing")
-                  enabled: phone.canUseCapability(modelData.id, "sharing")
-                  foreground: root.foreground
-                  fontFamily: root.fontFamily
-                  bordered: true
-                  onClicked: {
-                    root.shareDeviceId = modelData.id
-                    root.shareDeviceName = modelData.name
-                    shareField.text = ""
-                    Qt.callLater(function() { shareField.forceActiveFocus() })
-                  }
-                }
-    
-                Button {
-                  iconText: "󰏲"
-                  tooltipText: phone.canUseCapability(modelData.id, "ring") ? qsTr("Ring phone") : phone.capabilityText(modelData.id, "ring")
-                  enabled: phone.canUseCapability(modelData.id, "ring")
-                  foreground: root.foreground
-                  fontFamily: root.fontFamily
-                  bordered: true
-                  onClicked: phone.ring(modelData.id)
-                }
-              }
-  
-              Button {
-                visible: root.activePhoneId === modelData.id
-                text: root.showCapabilities ? qsTr("Hide phone setup") : qsTr("Phone setup and capabilities")
-                focusable: true
-                Accessible.role: Accessible.Button
-                Accessible.name: text
-                onClicked: root.showCapabilities = !root.showCapabilities
-              }
-
-              ColumnLayout {
-                visible: root.activePhoneId === modelData.id && root.showCapabilities
-                Layout.fillWidth: true
-                spacing: Style.space(4)
-
-                Text {
-                  Layout.fillWidth: true
-                  text: phone.setupText(modelData)
-                  textFormat: Text.PlainText
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  wrapMode: Text.Wrap
-                }
-
-                Repeater {
-                  model: [{key: "messaging", label: qsTr("Messages")},
-                    {key: "sharing", label: qsTr("Files, text and links")},
-                    {key: "clipboard", label: qsTr("Clipboard")},
-                    {key: "notifications", label: qsTr("Notifications")},
-                    {key: "ring", label: qsTr("Ring")},
-                    {key: "media", label: qsTr("Media controls")}]
-                  Text {
-                    required property var modelData
-                    Layout.fillWidth: true
-                    text: modelData.label + ": " + phone.capabilityText(root.activePhoneId, modelData.key)
-                    textFormat: Text.PlainText
-                    color: root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                    wrapMode: Text.Wrap
-                  }
-                }
-              }
-
-            // Media controls for the phone's active player. The mprisremote
-            // plugin emits no change signals, so this section advances from the
-            // panel's regular polling (3s while open) rather than push events.
-            // Compact by design: the header lives in the track-info column, and
-            // the thin MediaBar sliders keep seek and volume to one line each.
-            ColumnLayout {
-              id: mediaSection
-              visible: phone.mediaControls && Model.hasMedia(modelData)
-              enabled: phone.canUseCapability(modelData.id, "media")
-              Layout.fillWidth: true
-              spacing: Style.space(4)
-
-              // Never null: the bindings below evaluate even while this section
-              // is hidden, which is what filled the journal with
-              // "Cannot read property 'volume' of null".
-              readonly property var media: Model.mediaState(modelData)
-  
-              RowLayout {
-                Layout.fillWidth: true
-                spacing: Style.space(8)
-  
-                Item {
-                  Layout.preferredWidth: Style.space(36)
-                  Layout.preferredHeight: Style.space(36)
-
-                  // Album art comes from the phone, so it is only loaded as a
-                  // verified local file and only decoded at thumbnail size.
-                  readonly property string artSource: Model.localImageSource(mediaSection.media.albumArt)
-
-                  Image {
-                    anchors.fill: parent
-                    visible: parent.artSource !== ""
-                    source: parent.artSource
-                    fillMode: Image.PreserveAspectFit
-                    asynchronous: true
-                    sourceSize.width: 128
-                    sourceSize.height: 128
-                  }
-
-                  Text {
-                    anchors.centerIn: parent
-                    visible: parent.artSource === ""
-                    text: "󰝚"
-                    color: root.foreground
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.title
-                  }
-                }
-  
-                ColumnLayout {
-                  Layout.fillWidth: true
-                  spacing: 0
-  
-                  Text {
-                    Layout.fillWidth: true
-                    text: "NOW PLAYING · " + mediaSection.media.player
-                    textFormat: Text.PlainText
-                    color: root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                    font.bold: true
-                    font.letterSpacing: 1.2
-                    elide: Text.ElideRight
-                  }
-  
-                  Text {
-                    Layout.fillWidth: true
-                    text: Model.mediaTitle(mediaSection.media)
-                    textFormat: Text.PlainText
-                    color: root.foreground
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
-                    font.bold: true
-                    elide: Text.ElideRight
-                  }
-  
-                  Text {
-                    visible: text !== ""
-                    Layout.fillWidth: true
-                    text: Model.mediaSubtitle(mediaSection.media)
-                    textFormat: Text.PlainText
-                    color: root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                    elide: Text.ElideRight
-                  }
-                }
-  
-                PanelActionButton {
-                  iconText: "󰒮"
-                  tooltipText: "Previous track"
-                  foreground: root.foreground
-                  fontFamily: root.fontFamily
-                  onClicked: phone.mediaAction(modelData.id, "Previous")
-                }
-  
-                PanelActionButton {
-                  iconText: mediaSection.media.isPlaying ? "󰏤" : "󰐊"
-                  tooltipText: mediaSection.media.isPlaying ? "Pause" : "Play"
-                  foreground: root.foreground
-                  fontFamily: root.fontFamily
-                  onClicked: phone.mediaAction(modelData.id, "PlayPause")
-                }
-  
-                PanelActionButton {
-                  iconText: "󰒭"
-                  tooltipText: "Next track"
-                  foreground: root.foreground
-                  fontFamily: root.fontFamily
-                  onClicked: phone.mediaAction(modelData.id, "Next")
-                }
-              }
-  
-              RowLayout {
-                visible: mediaSection.media.canSeek && mediaSection.media.length > 0
-                Layout.fillWidth: true
-                spacing: Style.space(8)
-  
-                Text {
-                  text: Model.mediaTime(mediaProgress.dragging ? mediaProgress.liveValue : mediaSection.media.position)
-                  textFormat: Text.PlainText
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-  
-                MediaBar {
-                  id: mediaProgress
-                  Layout.fillWidth: true
-                  bar: root.bar
-                  minimum: 0
-                  maximum: Math.max(1000, mediaSection.media.length)
-                  step: 1000
-                  integer: true
-                  value: mediaSection.media.position
-                  onReleased: function(v) { phone.mediaSeek(modelData.id, v) }
-                }
-  
-                Text {
-                  text: Model.mediaTime(mediaSection.media.length)
-                  textFormat: Text.PlainText
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-              }
-  
-              RowLayout {
-                Layout.fillWidth: true
-                spacing: Style.space(8)
-  
-                Text {
-                  text: "󰕾"
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-  
-                MediaBar {
-                  id: mediaVolume
-                  Layout.fillWidth: true
-                  bar: root.bar
-                  minimum: 0
-                  maximum: 100
-                  step: 5
-                  integer: true
-                  value: mediaSection.media.volume
-                  onReleased: function(v) { phone.mediaVolume(modelData.id, v) }
-                }
-  
-                Text {
-                  text: Math.round(mediaVolume.dragging ? mediaVolume.liveValue : mediaSection.media.volume) + "%"
-                  textFormat: Text.PlainText
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-              }
-            }
-          }
-          }
-        }
-
-        RowLayout {
-          visible: phone.installed || phone.devices.length > 0
-          Layout.alignment: Qt.AlignHCenter
-          spacing: Style.space(8)
-
-          Button {
-            visible: phone.installed
-            text: phone.devices.length === 0 ? "Open pairing" : "Manage devices"
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            bordered: true
-            onClicked: phone.openPairing()
-          }
-
-          Button {
-            visible: phone.devices.length > 0
-            iconText: "󰍩"
-            text: "Messages"
-            enabled: root.messagesReady
-            focusable: true
-            Accessible.role: Accessible.Button
-            Accessible.name: qsTr("Open messages for %1").arg(phone.selectedDeviceName)
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            bordered: true
-            onClicked: root.openMessages({})
-          }
-        }
 
         Button {
-          text: root.showFiles ? qsTr("Hide file sharing") : qsTr("Share files")
-          visible: root.activePhoneId !== ""
+          visible: phone.installed && phone.devices.length === 0 && root.activePhoneId === ""
+          text: qsTr("Open pairing")
+          iconText: "󰌘"
+          bordered: true
           focusable: true
-          Accessible.role: Accessible.Button
-          Accessible.name: text
-          onClicked: root.showFiles = !root.showFiles
-        }
-
-        FileShare {
-          id: fileShare
-          visible: root.showFiles
-          Layout.fillWidth: true
-          deviceId: phone.selectedDeviceId
-          deviceName: phone.selectedDeviceName
-          canShare: phone.canUseCapability(phone.selectedDeviceId, "sharing")
           foreground: root.foreground
           fontFamily: root.fontFamily
-          onRequestFinished: phone.refresh()
-        }
-
-        Button {
-          text: root.showDiagnostics ? qsTr("Hide diagnostics") : qsTr("Connection diagnostics")
-          focusable: true
           Accessible.role: Accessible.Button
           Accessible.name: text
-          onClicked: {
-            root.showDiagnostics = !root.showDiagnostics
-            if (root.showDiagnostics) phone.loadDiagnostics()
-          }
+          onClicked: phone.openPairing()
         }
 
-        ColumnLayout {
-          visible: root.showDiagnostics
+        // Fixed-width wrapper: the cells size from the row width, so the grid's
+        // own implicit width must not feed back into the column layout.
+        Item {
+          visible: root.activePhoneId !== "" && phone.installed
           Layout.fillWidth: true
-          spacing: Style.space(6)
-          Text {
-            Layout.fillWidth: true
-            text: phone.diagnosticsStatus
-            textFormat: Text.PlainText
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            wrapMode: Text.Wrap
-          }
-          Controls.ScrollView {
-            id: diagnosticsScroll
-            Layout.fillWidth: true
-            Layout.preferredHeight: Style.space(160)
-            contentWidth: availableWidth
-            visible: phone.diagnosticsText !== ""
-            clip: true
-            Controls.TextArea {
-              width: diagnosticsScroll.availableWidth
-              text: phone.diagnosticsText
-              readOnly: true
-              selectByMouse: true
-              selectionColor: Color.accent
-              selectedTextColor: Color.background
-              background: Rectangle {
-                color: Color.background
-                border.color: root.dim
-                radius: Style.cornerRadius
-              }
-              textFormat: TextEdit.PlainText
-              wrapMode: TextEdit.WrapAnywhere
-              color: root.foreground
-              font.family: "monospace"
-              font.pixelSize: Style.font.caption
-              Accessible.name: qsTr("Redacted connection diagnostics")
+          implicitHeight: actionGrid.implicitHeight
+
+          Grid {
+            id: actionGrid
+            width: parent.width
+            columns: 2
+            spacing: Style.space(8)
+            readonly property real cellWidth: (width - spacing) / 2
+
+            Button {
+              width: actionGrid.cellWidth
+              iconText: "󰍩"
+              text: root.unreadConversations.length > 0 ? qsTr("Messages · %1").arg(root.unreadConversations.length) : qsTr("Messages")
+              tooltipText: root.messagesReady ? "" : phone.capabilityText(root.activePhoneId, "messaging")
+              enabled: root.messagesReady
+              opacity: enabled ? 1.0 : 0.5
+              bordered: true
+              focusable: true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              Accessible.role: Accessible.Button
+              Accessible.name: qsTr("Open messages for %1").arg(phone.selectedDeviceName)
+              onClicked: root.openMessages({})
             }
-          }
-          Button {
-            text: qsTr("Refresh diagnostics")
-            enabled: !phone.diagnosticsBusy
-            focusable: true
-            Accessible.role: Accessible.Button
-            Accessible.name: text
-            onClicked: phone.loadDiagnostics()
+
+            Button {
+              width: actionGrid.cellWidth
+              iconText: "󰅌"
+              text: qsTr("Clipboard")
+              tooltipText: enabled ? qsTr("Send the desktop clipboard to the phone") : phone.capabilityText(root.activePhoneId, "clipboard")
+              enabled: phone.canUseCapability(root.activePhoneId, "clipboard") && !phone.actionBusy
+              opacity: enabled ? 1.0 : 0.5
+              bordered: true
+              focusable: true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              Accessible.role: Accessible.Button
+              Accessible.name: qsTr("Send clipboard to %1").arg(phone.selectedDeviceName)
+              onClicked: phone.sendClipboard(root.activePhoneId)
+            }
+
+            Button {
+              width: actionGrid.cellWidth
+              iconText: "󰌷"
+              text: qsTr("Text or link")
+              tooltipText: enabled ? "" : phone.capabilityText(root.activePhoneId, "sharing")
+              selected: root.shareDeviceId !== ""
+              enabled: root.shareDeviceId !== "" || phone.canUseCapability(root.activePhoneId, "sharing")
+              opacity: enabled ? 1.0 : 0.5
+              bordered: true
+              focusable: true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              Accessible.role: Accessible.Button
+              Accessible.name: qsTr("Send text or link to %1").arg(phone.selectedDeviceName)
+              onClicked: root.toggleShareText()
+            }
+
+            Button {
+              width: actionGrid.cellWidth
+              iconText: "󰈔"
+              text: qsTr("Files")
+              tooltipText: fileShare.canShare ? "" : phone.capabilityText(root.activePhoneId, "sharing")
+              selected: root.showFiles
+              bordered: true
+              focusable: true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              Accessible.role: Accessible.Button
+              Accessible.name: qsTr("Share files with %1").arg(phone.selectedDeviceName)
+              onClicked: root.toggleFiles()
+            }
           }
         }
 
@@ -913,17 +647,19 @@ Panel {
           spacing: Style.space(6)
 
           Text {
-            text: "Send text or link to " + root.shareDeviceName
+            Layout.fillWidth: true
+            text: qsTr("To %1").arg(root.shareDeviceName)
             textFormat: Text.PlainText
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
+            elide: Text.ElideRight
           }
-  
+
           RowLayout {
             Layout.fillWidth: true
             spacing: Style.space(8)
-  
+
             TextField {
               id: shareField
               objectName: "shareTextField"
@@ -935,253 +671,107 @@ Panel {
                 if (phone.shareText(root.shareDeviceId, text)) root.shareDeviceId = ""
               }
             }
-  
+
             Button {
-              text: "Send"
+              text: qsTr("Send")
               enabled: shareField.text.trim() !== "" && !phone.actionBusy && phone.canUseCapability(root.shareDeviceId, "sharing")
+              opacity: enabled ? 1.0 : 0.5
+              bordered: true
+              focusable: true
               foreground: root.foreground
               fontFamily: root.fontFamily
-              bordered: true
+              Accessible.role: Accessible.Button
+              Accessible.name: qsTr("Send text to %1").arg(root.shareDeviceName)
               onClicked: {
                 if (phone.shareText(root.shareDeviceId, shareField.text)) root.shareDeviceId = ""
               }
             }
-  
-            Button {
-              text: "Cancel"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              onClicked: root.shareDeviceId = ""
-            }
           }
-        }
-  
-        Text {
-          visible: root.panelContentHidden
-          Layout.fillWidth: true
-          text: qsTr("Message previews and notification contents are hidden. Counts remain visible. Open Messages to read a conversation, or change Panel message content in widget settings.")
-          wrapMode: Text.Wrap
-          color: root.dim
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
         }
 
-        RowLayout {
-          visible: root.unreadConversations.length > 0
+        FileShare {
+          id: fileShare
+          visible: root.showFiles && root.activePhoneId !== ""
           Layout.fillWidth: true
-  
-          Text {
+          deviceId: phone.selectedDeviceId
+          deviceName: phone.selectedDeviceName
+          canShare: phone.canUseCapability(phone.selectedDeviceId, "sharing")
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          onRequestFinished: phone.refresh()
+        }
+
+        // Media controls for the selected phone's active player. The
+        // mprisremote plugin emits no change signals, so this section advances
+        // from the panel's regular polling (3s while open), not push events.
+        ColumnLayout {
+          id: mediaSection
+          visible: phone.mediaControls && Model.hasMedia(phone.selectedDevice)
+          enabled: phone.canUseCapability(root.activePhoneId, "media")
+          Layout.fillWidth: true
+          spacing: Style.space(8)
+
+          // Never null: the bindings below evaluate even while this section
+          // is hidden, which is what filled the journal with
+          // "Cannot read property 'volume' of null".
+          readonly property var media: Model.mediaState(phone.selectedDevice)
+
+          PanelSeparator { Layout.fillWidth: true; foreground: root.foreground }
+
+          PanelSectionHeader {
             Layout.fillWidth: true
-            text: "UNREAD MESSAGES · " + root.unreadConversations.length
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            font.bold: true
-            font.letterSpacing: 1.2
-          }
-  
-          Button {
-            text: "Clear"
-            visible: !root.panelContentHidden
+            text: mediaSection.media.player !== "" ? qsTr("NOW PLAYING · %1").arg(String(mediaSection.media.player).toUpperCase()) : qsTr("NOW PLAYING")
             foreground: root.foreground
             fontFamily: root.fontFamily
-            onClicked: root.markSeenEntries(root.unreadConversations)
+            elide: Text.ElideRight
           }
-        }
-  
-        ListView {
-          objectName: "unreadContentList"
-          visible: !root.panelContentHidden && root.unreadConversations.length > 0
-          Layout.fillWidth: true
-          Layout.preferredHeight: Math.min(contentHeight, Style.space(150))
-          clip: true
-          spacing: Style.space(6)
-          boundsBehavior: Flickable.StopAtBounds
-          interactive: contentHeight > height
-          model: root.panelContentHidden ? [] : root.unreadConversations
-  
-          Controls.ScrollBar.vertical: Controls.ScrollBar { policy: Controls.ScrollBar.AsNeeded }
-  
-          delegate: Rectangle {
-            required property var modelData
-            width: ListView.view.width
-            implicitHeight: unreadRow.implicitHeight + Style.space(16)
-            color: Style.selectedFillFor(root.foreground, Color.accent)
-            radius: Style.cornerRadius
-  
-            MouseArea {
-              anchors.fill: parent
-              hoverEnabled: true
-              cursorShape: Qt.PointingHandCursor
-              onClicked: {
-                root.markSeenEntries([modelData])
-                root.openMessages({ threadId: modelData.threadId })
-              }
-            }
-  
-            RowLayout {
-              id: unreadRow
-              anchors.fill: parent
-              anchors.margins: Style.space(8)
-              spacing: Style.space(8)
-  
-              Text {
-                text: "󰍩"
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.icon
-              }
-  
-              ColumnLayout {
-                Layout.fillWidth: true
-                spacing: Style.space(2)
-  
-                Text {
-                  Layout.fillWidth: true
-                  text: Model.conversationTitle(modelData)
-                  textFormat: Text.PlainText
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.body
-                  font.bold: true
-                  elide: Text.ElideRight
-                }
-  
-                Text {
-                  visible: text !== ""
-                  Layout.fillWidth: true
-                  text: Model.previewText(modelData)
-                  textFormat: Text.PlainText
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  wrapMode: Text.Wrap
-                  maximumLineCount: 2
-                  elide: Text.ElideRight
-                }
-              }
-            }
-          }
-        }
-  
-        RowLayout {
-          visible: root.notificationSectionVisible
-          Layout.fillWidth: true
-  
-          Text {
-            Layout.fillWidth: true
-            text: "PHONE NOTIFICATIONS · " + root.notifications.length
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            font.bold: true
-            font.letterSpacing: 1.2
-          }
-  
-          Button {
-            text: "Clear all"
-            visible: !root.panelContentHidden && root.notifications.length > 0
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            onClicked: phone.dismissAllNotifications(root.activePhoneId)
-          }
-        }
-
-        Repeater {
-          model: root.notificationSectionVisible ? root.notificationSummary : []
-
-          Text {
-            required property string modelData
-            Layout.fillWidth: true
-            text: modelData
-            textFormat: Text.PlainText
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            wrapMode: Text.Wrap
-          }
-        }
-
-        ListView {
-          objectName: "notificationContentList"
-          visible: !root.panelContentHidden && root.notifications.length > 0
-          Layout.fillWidth: true
-          Layout.preferredHeight: Math.min(contentHeight, Style.space(190))
-          clip: true
-          spacing: Style.space(6)
-          boundsBehavior: Flickable.StopAtBounds
-          interactive: contentHeight > height
-          model: root.panelContentHidden ? [] : root.notifications
-  
-          Controls.ScrollBar.vertical: Controls.ScrollBar { policy: Controls.ScrollBar.AsNeeded }
-  
-          delegate: Rectangle {
-            required property var modelData
-            width: ListView.view.width
-            implicitHeight: notificationRow.implicitHeight + Style.space(16)
-            color: Style.selectedFillFor(root.foreground, Color.accent)
-            radius: Style.cornerRadius
-  
-            MouseArea {
-              visible: modelData.isConversation
-              anchors.fill: parent
-              hoverEnabled: true
-              cursorShape: Qt.PointingHandCursor
-              onClicked: root.openMessages({ conversationHint: modelData.title })
-            }
 
           RowLayout {
-            id: notificationRow
-            anchors.fill: parent
-            anchors.margins: Style.space(8)
-            spacing: Style.space(8)
+            Layout.fillWidth: true
+            spacing: Style.space(10)
 
             Item {
-              Layout.preferredWidth: Style.space(28)
-              Layout.preferredHeight: Style.space(28)
+              Layout.preferredWidth: Style.space(40)
+              Layout.preferredHeight: Style.space(40)
 
-              // The phone picks this icon, so it is only loaded as a verified
-              // local file and only decoded at thumbnail size.
-              readonly property string iconSource: Model.localImageSource(modelData.iconPath)
+              // Album art comes from the phone, so it is only loaded as a
+              // verified local file and only decoded at thumbnail size.
+              readonly property string artSource: Model.localImageSource(mediaSection.media.albumArt)
 
               Image {
                 anchors.fill: parent
-                visible: parent.iconSource !== ""
-                source: parent.iconSource
+                visible: parent.artSource !== ""
+                source: parent.artSource
                 fillMode: Image.PreserveAspectFit
                 asynchronous: true
-                sourceSize.width: 96
-                sourceSize.height: 96
+                sourceSize.width: 128
+                sourceSize.height: 128
               }
 
-              Text {
-                anchors.centerIn: parent
-                visible: parent.iconSource === ""
-                text: "󰂚"
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.icon
+              Rectangle {
+                anchors.fill: parent
+                visible: parent.artSource === ""
+                color: Style.hoverFillFor(root.foreground, Color.accent)
+                radius: Style.cornerRadius
+
+                Text {
+                  anchors.centerIn: parent
+                  text: "󰝚"
+                  textFormat: Text.PlainText
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.title
+                }
               }
             }
 
             ColumnLayout {
               Layout.fillWidth: true
-              spacing: Style.space(2)
+              spacing: Style.space(1)
 
               Text {
                 Layout.fillWidth: true
-                text: modelData.appName
-                textFormat: Text.PlainText
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: true
-                elide: Text.ElideRight
-              }
-
-              Text {
-                Layout.fillWidth: true
-                text: Model.notificationDisplayTitle(modelData)
+                text: Model.mediaTitle(mediaSection.media)
                 textFormat: Text.PlainText
                 color: root.foreground
                 font.family: root.fontFamily
@@ -1193,115 +783,673 @@ Panel {
               Text {
                 visible: text !== ""
                 Layout.fillWidth: true
-                text: Model.notificationDisplayText(modelData)
+                text: Model.mediaSubtitle(mediaSection.media)
                 textFormat: Text.PlainText
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
-                wrapMode: Text.Wrap
-                maximumLineCount: 2
                 elide: Text.ElideRight
               }
             }
 
-            Button {
-              visible: modelData.replyable
-              text: "Reply"
+            PanelActionButton {
+              iconText: "󰒮"
+              tooltipText: qsTr("Previous track")
+              focusable: true
               foreground: root.foreground
               fontFamily: root.fontFamily
-              onClicked: {
-                root.notifReplyId = modelData.replyId
-                root.notifReplyDeviceId = root.activePhoneId
-                root.notifReplyTitle = modelData.title !== "" ? modelData.title : modelData.appName
-                notifReplyField.text = ""
-                Qt.callLater(function() { notifReplyField.forceActiveFocus() })
-              }
+              Accessible.role: Accessible.Button
+              Accessible.name: tooltipText
+              onClicked: phone.mediaAction(root.activePhoneId, "Previous")
             }
 
             PanelActionButton {
-              visible: modelData.dismissable
-              iconText: "󰅖"
-              tooltipText: "Dismiss on phone"
+              iconText: mediaSection.media.isPlaying ? "󰏤" : "󰐊"
+              tooltipText: mediaSection.media.isPlaying ? qsTr("Pause") : qsTr("Play")
+              focusable: true
+              bordered: true
               foreground: root.foreground
               fontFamily: root.fontFamily
-              onClicked: phone.dismissNotification(root.activePhoneId, modelData.id)
+              Accessible.role: Accessible.Button
+              Accessible.name: tooltipText
+              onClicked: phone.mediaAction(root.activePhoneId, "PlayPause")
+            }
+
+            PanelActionButton {
+              iconText: "󰒭"
+              tooltipText: qsTr("Next track")
+              focusable: true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              Accessible.role: Accessible.Button
+              Accessible.name: tooltipText
+              onClicked: phone.mediaAction(root.activePhoneId, "Next")
             }
           }
-        }
-      }
 
-      ColumnLayout {
-        visible: !root.panelContentHidden && root.notifReplyId !== ""
-        Layout.fillWidth: true
-        spacing: Style.space(6)
-
-        Text {
-          text: "Reply to " + root.notifReplyTitle
-          textFormat: Text.PlainText
-          color: root.dim
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-        }
-
-        RowLayout {
-          Layout.fillWidth: true
-          spacing: Style.space(8)
-
-          TextField {
-            id: notifReplyField
-            objectName: "notificationReplyField"
+          RowLayout {
+            visible: mediaSection.media.canSeek && mediaSection.media.length > 0
             Layout.fillWidth: true
-            placeholderText: "Reply"
-            foreground: root.foreground
-            font.family: root.fontFamily
-            onAccepted: if (!root.panelContentHidden && text.trim() !== "" && !phone.actionBusy && phone.canUseCapability(root.notifReplyDeviceId, "notifications")) {
-              if (phone.replyToNotification(root.notifReplyDeviceId, root.notifReplyId, text)) root.notifReplyId = ""
+            spacing: Style.space(8)
+
+            Text {
+              Layout.preferredWidth: Style.space(34)
+              text: Model.mediaTime(mediaProgress.dragging ? mediaProgress.liveValue : mediaSection.media.position)
+              textFormat: Text.PlainText
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            MediaBar {
+              id: mediaProgress
+              Layout.fillWidth: true
+              bar: root.bar
+              minimum: 0
+              maximum: Math.max(1000, mediaSection.media.length)
+              step: 1000
+              integer: true
+              value: mediaSection.media.position
+              onReleased: function(v) { phone.mediaSeek(root.activePhoneId, v) }
+            }
+
+            Text {
+              Layout.preferredWidth: Style.space(34)
+              horizontalAlignment: Text.AlignRight
+              text: Model.mediaTime(mediaSection.media.length)
+              textFormat: Text.PlainText
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
             }
           }
 
-          Button {
-            text: "Send"
-            enabled: !root.panelContentHidden && notifReplyField.text.trim() !== "" && !phone.actionBusy && phone.canUseCapability(root.notifReplyDeviceId, "notifications")
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            bordered: true
-            onClicked: {
-              if (!root.panelContentHidden && phone.replyToNotification(root.notifReplyDeviceId, root.notifReplyId, notifReplyField.text)) root.notifReplyId = ""
+          RowLayout {
+            Layout.fillWidth: true
+            spacing: Style.space(8)
+
+            Text {
+              Layout.preferredWidth: Style.space(34)
+              text: "󰕾"
+              textFormat: Text.PlainText
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+            }
+
+            MediaBar {
+              id: mediaVolume
+              Layout.fillWidth: true
+              bar: root.bar
+              minimum: 0
+              maximum: 100
+              step: 5
+              integer: true
+              value: mediaSection.media.volume
+              onReleased: function(v) { phone.mediaVolume(root.activePhoneId, v) }
+            }
+
+            Text {
+              Layout.preferredWidth: Style.space(34)
+              horizontalAlignment: Text.AlignRight
+              text: Math.round(mediaVolume.dragging ? mediaVolume.liveValue : mediaSection.media.volume) + "%"
+              textFormat: Text.PlainText
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
             }
           }
-
-          Button {
-            text: "Cancel"
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            onClicked: root.notifReplyId = ""
-          }
-        }
-      }
-
-        Button {
-          objectName: "notificationAppsButton"
-          visible: !root.panelContentHidden && root.notificationSectionVisible
-          text: root.showNotificationApps ? qsTr("Hide notification apps") : qsTr("Notification apps")
-          focusable: true
-          Accessible.role: Accessible.Button
-          Accessible.name: text
-          foreground: root.foreground
-          fontFamily: root.fontFamily
-          onClicked: root.showNotificationApps = !root.showNotificationApps
         }
 
-        // App names are notification metadata, so the list follows Panel
-        // message content. Its delegate model is emptied while hidden.
         ColumnLayout {
-          objectName: "notificationAppList"
-          visible: !root.panelContentHidden && root.showNotificationApps && root.notificationSectionVisible
+          visible: root.panelContentHidden && (root.unreadConversations.length > 0 || root.notificationSectionVisible)
           Layout.fillWidth: true
           spacing: Style.space(8)
+
+          PanelSeparator { Layout.fillWidth: true; foreground: root.foreground }
 
           Text {
             Layout.fillWidth: true
-            text: qsTr("Apps in the phone's current notifications, from up to 100 checked. This is not a list of installed apps. Mute hides an app in OmaLink only: the panel, popups and Clear all. The phone and KDE Connect are unchanged.")
+            text: qsTr("Message previews and notification contents are hidden. Counts remain visible. Open Messages to read a conversation, or change Panel message content in widget settings.")
+            textFormat: Text.PlainText
+            wrapMode: Text.Wrap
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+        }
+
+        ColumnLayout {
+          visible: root.unreadConversations.length > 0
+          Layout.fillWidth: true
+          spacing: Style.space(8)
+
+          PanelSeparator { Layout.fillWidth: true; foreground: root.foreground }
+
+          RowLayout {
+            Layout.fillWidth: true
+
+            PanelSectionHeader {
+              Layout.fillWidth: true
+              text: qsTr("UNREAD MESSAGES · %1").arg(root.unreadConversations.length)
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+            }
+
+            Button {
+              text: qsTr("Clear")
+              visible: !root.panelContentHidden
+              focusable: true
+              fontSize: Style.font.caption
+              verticalPadding: Style.space(2)
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              Accessible.role: Accessible.Button
+              Accessible.name: qsTr("Clear unread messages in OmaLink")
+              onClicked: root.markSeenEntries(root.unreadConversations)
+            }
+          }
+
+          ListView {
+            objectName: "unreadContentList"
+            visible: !root.panelContentHidden && root.unreadConversations.length > 0
+            Layout.fillWidth: true
+            Layout.preferredHeight: Math.min(contentHeight, Style.space(170))
+            clip: true
+            spacing: Style.space(2)
+            boundsBehavior: Flickable.StopAtBounds
+            interactive: contentHeight > height
+            model: root.panelContentHidden ? [] : root.unreadConversations
+
+            Controls.ScrollBar.vertical: Controls.ScrollBar { policy: Controls.ScrollBar.AsNeeded }
+
+            delegate: CursorSurface {
+              id: unreadItem
+              required property var modelData
+              width: ListView.view.width
+              implicitHeight: unreadRow.implicitHeight + Style.space(12)
+              hasCursor: unreadMouse.containsMouse || activeFocus
+              foreground: root.foreground
+              activeFocusOnTab: true
+              Accessible.role: Accessible.Button
+              Accessible.name: qsTr("Open conversation with %1").arg(Model.conversationTitle(modelData))
+              Keys.onReturnPressed: open()
+              Keys.onEnterPressed: open()
+              Keys.onSpacePressed: open()
+
+              function open() {
+                root.markSeenEntries([modelData])
+                root.openMessages({ threadId: modelData.threadId })
+              }
+
+              MouseArea {
+                id: unreadMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: unreadItem.open()
+              }
+
+              RowLayout {
+                id: unreadRow
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: Style.space(8)
+                anchors.rightMargin: Style.space(8)
+                spacing: Style.space(10)
+
+                Text {
+                  Layout.alignment: Qt.AlignTop
+                  Layout.preferredWidth: Style.space(24)
+                  horizontalAlignment: Text.AlignHCenter
+                  text: "󰍩"
+                  textFormat: Text.PlainText
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.icon
+                }
+
+                ColumnLayout {
+                  Layout.fillWidth: true
+                  spacing: Style.space(1)
+
+                  RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Style.space(8)
+
+                    Text {
+                      Layout.fillWidth: true
+                      text: Model.conversationTitle(unreadItem.modelData)
+                      textFormat: Text.PlainText
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                      font.bold: true
+                      elide: Text.ElideRight
+                    }
+
+                    Text {
+                      text: Model.relativeTime(unreadItem.modelData.timestamp, phone.clockNow)
+                      textFormat: Text.PlainText
+                      color: root.dim
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+                  }
+
+                  Text {
+                    visible: text !== ""
+                    Layout.fillWidth: true
+                    text: Model.previewText(unreadItem.modelData)
+                    textFormat: Text.PlainText
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    wrapMode: Text.Wrap
+                    maximumLineCount: 2
+                    elide: Text.ElideRight
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        ColumnLayout {
+          visible: root.notificationSectionVisible
+          Layout.fillWidth: true
+          spacing: Style.space(8)
+
+          PanelSeparator { Layout.fillWidth: true; foreground: root.foreground }
+
+          RowLayout {
+            Layout.fillWidth: true
+
+            PanelSectionHeader {
+              Layout.fillWidth: true
+              text: qsTr("NOTIFICATIONS · %1").arg(root.notifications.length)
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+            }
+
+            Button {
+              text: qsTr("Clear all")
+              visible: !root.panelContentHidden && root.notifications.length > 0
+              focusable: true
+              fontSize: Style.font.caption
+              verticalPadding: Style.space(2)
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              Accessible.role: Accessible.Button
+              Accessible.name: qsTr("Dismiss all listed notifications on the phone")
+              onClicked: phone.dismissAllNotifications(root.activePhoneId)
+            }
+          }
+
+          ListView {
+            objectName: "notificationContentList"
+            visible: !root.panelContentHidden && root.notifications.length > 0
+            Layout.fillWidth: true
+            Layout.preferredHeight: Math.min(contentHeight, Style.space(230))
+            clip: true
+            spacing: Style.space(2)
+            boundsBehavior: Flickable.StopAtBounds
+            interactive: contentHeight > height
+            model: root.panelContentHidden ? [] : root.notifications
+
+            Controls.ScrollBar.vertical: Controls.ScrollBar { policy: Controls.ScrollBar.AsNeeded }
+
+            delegate: CursorSurface {
+              id: notificationItem
+              required property var modelData
+              width: ListView.view.width
+              implicitHeight: notificationRow.implicitHeight + Style.space(12)
+              hasCursor: notificationMouse.containsMouse || activeFocus
+              foreground: root.foreground
+              activeFocusOnTab: modelData.isConversation
+              Accessible.role: modelData.isConversation ? Accessible.Button : Accessible.ListItem
+              Accessible.name: modelData.appName + ": " + Model.notificationDisplayTitle(modelData)
+              Keys.onReturnPressed: if (modelData.isConversation) open()
+              Keys.onEnterPressed: if (modelData.isConversation) open()
+
+              function open() { root.openMessages({ conversationHint: modelData.title }) }
+
+              MouseArea {
+                id: notificationMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: notificationItem.modelData.isConversation ? Qt.PointingHandCursor : Qt.ArrowCursor
+                onClicked: if (notificationItem.modelData.isConversation) notificationItem.open()
+              }
+
+              RowLayout {
+                id: notificationRow
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: Style.space(8)
+                anchors.rightMargin: Style.space(4)
+                spacing: Style.space(10)
+
+                Item {
+                  Layout.alignment: Qt.AlignTop
+                  Layout.preferredWidth: Style.space(24)
+                  Layout.preferredHeight: Style.space(24)
+
+                  // The phone picks this icon, so it is only loaded as a verified
+                  // local file and only decoded at thumbnail size.
+                  readonly property string iconSource: Model.localImageSource(notificationItem.modelData.iconPath)
+
+                  Image {
+                    anchors.fill: parent
+                    visible: parent.iconSource !== ""
+                    source: parent.iconSource
+                    fillMode: Image.PreserveAspectFit
+                    asynchronous: true
+                    sourceSize.width: 96
+                    sourceSize.height: 96
+                  }
+
+                  Text {
+                    anchors.centerIn: parent
+                    visible: parent.iconSource === ""
+                    text: notificationItem.modelData.isConversation ? "󰍩" : "󰂚"
+                    textFormat: Text.PlainText
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.icon
+                  }
+                }
+
+                ColumnLayout {
+                  Layout.fillWidth: true
+                  spacing: Style.space(1)
+
+                  Text {
+                    Layout.fillWidth: true
+                    text: notificationItem.modelData.appName
+                    textFormat: Text.PlainText
+                    color: root.muted
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    font.bold: true
+                    elide: Text.ElideRight
+                  }
+
+                  Text {
+                    Layout.fillWidth: true
+                    text: Model.notificationDisplayTitle(notificationItem.modelData)
+                    textFormat: Text.PlainText
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                    font.bold: true
+                    elide: Text.ElideRight
+                  }
+
+                  Text {
+                    visible: text !== ""
+                    Layout.fillWidth: true
+                    text: Model.notificationDisplayText(notificationItem.modelData)
+                    textFormat: Text.PlainText
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    wrapMode: Text.Wrap
+                    maximumLineCount: 2
+                    elide: Text.ElideRight
+                  }
+                }
+
+                PanelActionButton {
+                  Layout.alignment: Qt.AlignTop
+                  visible: notificationItem.modelData.replyable
+                  iconText: "󰑚"
+                  tooltipText: qsTr("Reply")
+                  focusable: true
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  Accessible.role: Accessible.Button
+                  Accessible.name: qsTr("Reply to %1").arg(Model.notificationDisplayTitle(notificationItem.modelData))
+                  onClicked: {
+                    root.notifReplyId = notificationItem.modelData.replyId
+                    root.notifReplyDeviceId = root.activePhoneId
+                    root.notifReplyTitle = notificationItem.modelData.title !== "" ? notificationItem.modelData.title : notificationItem.modelData.appName
+                    notifReplyField.text = ""
+                    Qt.callLater(function() { notifReplyField.forceActiveFocus() })
+                  }
+                }
+
+                PanelActionButton {
+                  Layout.alignment: Qt.AlignTop
+                  visible: notificationItem.modelData.dismissable
+                  iconText: "󰅖"
+                  tooltipText: qsTr("Dismiss on phone")
+                  focusable: true
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  Accessible.role: Accessible.Button
+                  Accessible.name: qsTr("Dismiss %1 on the phone").arg(Model.notificationDisplayTitle(notificationItem.modelData))
+                  onClicked: phone.dismissNotification(root.activePhoneId, notificationItem.modelData.id)
+                }
+              }
+            }
+          }
+
+          ColumnLayout {
+            visible: !root.panelContentHidden && root.notifReplyId !== ""
+            Layout.fillWidth: true
+            spacing: Style.space(6)
+
+            Text {
+              Layout.fillWidth: true
+              text: qsTr("Reply to %1").arg(root.notifReplyTitle)
+              textFormat: Text.PlainText
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
+            }
+
+            RowLayout {
+              Layout.fillWidth: true
+              spacing: Style.space(8)
+
+              TextField {
+                id: notifReplyField
+                objectName: "notificationReplyField"
+                Layout.fillWidth: true
+                placeholderText: qsTr("Reply")
+                foreground: root.foreground
+                font.family: root.fontFamily
+                onAccepted: if (!root.panelContentHidden && text.trim() !== "" && !phone.actionBusy && phone.canUseCapability(root.notifReplyDeviceId, "notifications")) {
+                  if (phone.replyToNotification(root.notifReplyDeviceId, root.notifReplyId, text)) root.notifReplyId = ""
+                }
+              }
+
+              Button {
+                text: qsTr("Send")
+                enabled: !root.panelContentHidden && notifReplyField.text.trim() !== "" && !phone.actionBusy && phone.canUseCapability(root.notifReplyDeviceId, "notifications")
+                opacity: enabled ? 1.0 : 0.5
+                bordered: true
+                focusable: true
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: {
+                  if (!root.panelContentHidden && phone.replyToNotification(root.notifReplyDeviceId, root.notifReplyId, notifReplyField.text)) root.notifReplyId = ""
+                }
+              }
+
+              PanelActionButton {
+                iconText: "󰅖"
+                tooltipText: qsTr("Cancel reply")
+                focusable: true
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                Accessible.role: Accessible.Button
+                Accessible.name: tooltipText
+                onClicked: root.notifReplyId = ""
+              }
+            }
+          }
+
+          Repeater {
+            model: root.notificationSectionVisible ? root.notificationSummary : []
+
+            Text {
+              required property string modelData
+              Layout.fillWidth: true
+              text: modelData
+              textFormat: Text.PlainText
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.Wrap
+            }
+          }
+
+          Button {
+            objectName: "notificationAppsButton"
+            visible: !root.panelContentHidden && root.notificationSectionVisible
+            Layout.fillWidth: true
+            leftAlign: true
+            iconText: root.showNotificationApps ? "󰅀" : "󰅂"
+            text: qsTr("Notification apps")
+            fontSize: Style.font.bodySmall
+            focusable: true
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            Accessible.role: Accessible.Button
+            Accessible.name: root.showNotificationApps ? qsTr("Hide notification apps") : qsTr("Show notification apps")
+            onClicked: root.showNotificationApps = !root.showNotificationApps
+          }
+
+          // App names are notification metadata, so the list follows Panel
+          // message content. Its delegate model is emptied while hidden.
+          ColumnLayout {
+            objectName: "notificationAppList"
+            visible: !root.panelContentHidden && root.showNotificationApps && root.notificationSectionVisible
+            Layout.fillWidth: true
+            spacing: Style.space(10)
+
+            Text {
+              Layout.fillWidth: true
+              text: qsTr("Apps in the phone's current notifications, from up to 100 checked. This is not a list of installed apps. Mute hides an app in OmaLink only: the panel, popups and Clear all. The phone and KDE Connect are unchanged.")
+              textFormat: Text.PlainText
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.Wrap
+            }
+
+            Repeater {
+              id: notificationAppRepeater
+              objectName: "notificationAppRepeater"
+              model: notificationAppModel
+
+              ColumnLayout {
+                id: appRow
+                required property string key
+                required property string label
+                required property string detail
+                required property string status
+                required property string rule
+                readonly property Item ruleGroup: ruleButtons
+                Layout.fillWidth: true
+                spacing: Style.space(4)
+
+                RowLayout {
+                  Layout.fillWidth: true
+                  spacing: Style.space(8)
+
+                  Text {
+                    Layout.fillWidth: true
+                    text: appRow.label
+                    textFormat: Text.PlainText
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                    font.bold: true
+                    elide: Text.ElideRight
+                  }
+
+                  ButtonGroup {
+                    id: ruleButtons
+                    options: [{value: "default", label: qsTr("Default"), tooltip: qsTr("Use the Notification sources setting")},
+                      {value: "allow", label: qsTr("Allow"), tooltip: qsTr("Always list this app")},
+                      {value: "mute", label: qsTr("Mute"), tooltip: qsTr("Hide this app in OmaLink")}]
+                    value: appRow.rule
+                    spacing: Style.space(4)
+                    foreground: root.foreground
+                    fontFamily: root.fontFamily
+                    fontSize: Style.font.caption
+                    Accessible.role: Accessible.Grouping
+                    Accessible.name: qsTr("Notification rule for %1").arg(appRow.label)
+                    onChanged: function(value) { root.setNotificationRule(appRow.key, value, appRow.label) }
+                  }
+                }
+
+                Text {
+                  Layout.fillWidth: true
+                  text: appRow.detail + " · " + appRow.status
+                  textFormat: Text.PlainText
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  wrapMode: Text.Wrap
+                }
+              }
+            }
+
+            Button {
+              visible: Object.keys(root.activePhoneRules).length > 0
+              text: qsTr("Reset app rules for this phone")
+              bordered: true
+              focusable: true
+              fontSize: Style.font.bodySmall
+              Accessible.role: Accessible.Button
+              Accessible.name: text
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.resetNotificationRules()
+            }
+          }
+        }
+
+        ColumnLayout {
+          visible: root.blueFerryEnabled
+          Layout.fillWidth: true
+          spacing: Style.space(8)
+
+          PanelSeparator { Layout.fillWidth: true; foreground: root.foreground }
+
+          BlueFerryCard {
+            Layout.fillWidth: true
+            service: blueFerry
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onOpenHistory: function(endpoint, backendOwner) { root.openBlueFerryHistory(endpoint, backendOwner) }
+          }
+        }
+
+        ColumnLayout {
+          visible: root.showPhoneList
+          Layout.fillWidth: true
+          spacing: Style.space(8)
+
+          PanelSeparator { Layout.fillWidth: true; foreground: root.foreground }
+
+          PanelSectionHeader {
+            text: qsTr("PHONES · %1").arg(phone.devices.length)
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+          }
+
+          Text {
+            visible: phone.discoveryTruncated
+            Layout.fillWidth: true
+            text: qsTr("Showing up to 8 devices. Open Manage devices to see all devices.")
             textFormat: Text.PlainText
             color: root.dim
             font.family: root.fontFamily
@@ -1310,70 +1458,286 @@ Panel {
           }
 
           Repeater {
-            id: notificationAppRepeater
-            objectName: "notificationAppRepeater"
-            model: notificationAppModel
+            model: root.showPhoneList ? phone.devices : []
 
-            ColumnLayout {
-              id: appRow
-              required property string key
-              required property string label
-              required property string detail
-              required property string status
-              required property string rule
-              readonly property Item ruleGroup: ruleButtons
+            CursorSurface {
+              id: phoneRow
+              required property var modelData
+              readonly property bool isSelected: root.activePhoneId === modelData.id
               Layout.fillWidth: true
-              spacing: Style.space(2)
+              implicitHeight: phoneRowContent.implicitHeight + Style.space(12)
+              hasCursor: phoneRowMouse.containsMouse && !isSelected
+              current: isSelected
+              foreground: root.foreground
+
+              MouseArea {
+                id: phoneRowMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                enabled: !phoneRow.isSelected && phone.canSelectDevice(phoneRow.modelData.id)
+                cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                onClicked: root.selectDevice(phoneRow.modelData.id)
+              }
+
+              RowLayout {
+                id: phoneRowContent
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: Style.space(10)
+                anchors.rightMargin: Style.space(8)
+                spacing: Style.space(10)
+
+                Text {
+                  text: "󰄜"
+                  textFormat: Text.PlainText
+                  color: root.foreground
+                  opacity: phone.canUseDevice(phoneRow.modelData.id) ? 1.0 : 0.5
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.heading
+                }
+
+                ColumnLayout {
+                  Layout.fillWidth: true
+                  spacing: Style.space(1)
+
+                  Text {
+                    Layout.fillWidth: true
+                    text: phoneRow.modelData.name
+                    textFormat: Text.PlainText
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                    font.bold: phoneRow.isSelected
+                    elide: Text.ElideRight
+                  }
+
+                  Text {
+                    Layout.fillWidth: true
+                    text: phone.canUseDevice(phoneRow.modelData.id) ? Model.batteryText(phoneRow.modelData) : phone.connectionText(phoneRow.modelData)
+                    textFormat: Text.PlainText
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    elide: Text.ElideRight
+                  }
+                }
+
+                Text {
+                  visible: phoneRow.isSelected
+                  text: qsTr("In use")
+                  textFormat: Text.PlainText
+                  color: root.muted
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                }
+
+                Button {
+                  visible: !phoneRow.isSelected
+                  text: qsTr("Use")
+                  enabled: phone.canSelectDevice(phoneRow.modelData.id)
+                  opacity: enabled ? 1.0 : 0.5
+                  bordered: true
+                  focusable: true
+                  fontSize: Style.font.bodySmall
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  Accessible.role: Accessible.Button
+                  Accessible.name: qsTr("Use %1 for messages and notifications").arg(phoneRow.modelData.name)
+                  onClicked: root.selectDevice(phoneRow.modelData.id)
+                }
+              }
+            }
+          }
+        }
+
+        PanelSeparator {
+          Layout.fillWidth: true
+          foreground: root.foreground
+        }
+
+        // Diagnostics stays reachable when status never loaded or KDE Connect
+        // is missing, which are the cases it exists for.
+        Flow {
+          Layout.fillWidth: true
+          spacing: Style.space(4)
+
+          Button {
+            visible: phone.devices.length > 0 || root.activePhoneId !== ""
+            iconText: "󰒓"
+            text: qsTr("Manage devices")
+            fontSize: Style.font.bodySmall
+            focusable: true
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            Accessible.role: Accessible.Button
+            Accessible.name: text
+            onClicked: phone.openPairing()
+          }
+
+          Button {
+            visible: root.activePhoneId !== ""
+            iconText: root.showCapabilities ? "󰅀" : "󰅂"
+            text: qsTr("Setup")
+            selected: root.showCapabilities
+            fontSize: Style.font.bodySmall
+            focusable: true
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            Accessible.role: Accessible.Button
+            Accessible.name: root.showCapabilities ? qsTr("Hide phone setup") : qsTr("Phone setup and capabilities")
+            onClicked: root.showCapabilities = !root.showCapabilities
+          }
+
+          Button {
+            iconText: root.showDiagnostics ? "󰅀" : "󰅂"
+            text: qsTr("Diagnostics")
+            selected: root.showDiagnostics
+            fontSize: Style.font.bodySmall
+            focusable: true
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            Accessible.role: Accessible.Button
+            Accessible.name: root.showDiagnostics ? qsTr("Hide diagnostics") : qsTr("Connection diagnostics")
+            onClicked: {
+              root.showDiagnostics = !root.showDiagnostics
+              if (root.showDiagnostics) phone.loadDiagnostics()
+            }
+          }
+        }
+
+        ColumnLayout {
+          visible: root.activePhoneId !== "" && root.showCapabilities
+          Layout.fillWidth: true
+          spacing: Style.space(8)
+
+          Text {
+            Layout.fillWidth: true
+            text: phone.setupText(phone.selectedDevice)
+            textFormat: Text.PlainText
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.Wrap
+          }
+
+          GridLayout {
+            Layout.fillWidth: true
+            columns: 2
+            columnSpacing: Style.space(12)
+            rowSpacing: Style.space(4)
+
+            Repeater {
+              model: [{key: "messaging", label: qsTr("Messages")},
+                {key: "sharing", label: qsTr("Files, text and links")},
+                {key: "clipboard", label: qsTr("Clipboard")},
+                {key: "notifications", label: qsTr("Notifications")},
+                {key: "ring", label: qsTr("Ring")},
+                {key: "media", label: qsTr("Media controls")}]
 
               Text {
-                Layout.fillWidth: true
-                text: appRow.label
+                required property var modelData
+                required property int index
+                Layout.row: index
+                Layout.column: 0
+                text: modelData.label
                 textFormat: Text.PlainText
                 color: root.foreground
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.body
-                font.bold: true
-                elide: Text.ElideRight
+                font.pixelSize: Style.font.caption
               }
+            }
+
+            Repeater {
+              model: ["messaging", "sharing", "clipboard", "notifications", "ring", "media"]
 
               Text {
+                required property string modelData
+                required property int index
+                Layout.row: index
+                Layout.column: 1
                 Layout.fillWidth: true
-                text: appRow.detail + " · " + appRow.status
+                text: phone.capabilityText(root.activePhoneId, modelData)
                 textFormat: Text.PlainText
-                color: root.dim
+                color: phone.canUseCapability(root.activePhoneId, modelData) ? root.dim : root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
                 wrapMode: Text.Wrap
               }
+            }
+          }
 
-              ButtonGroup {
-                id: ruleButtons
-                options: [{value: "default", label: qsTr("Default"), tooltip: qsTr("Use the Notification sources setting")},
-                  {value: "allow", label: qsTr("Allow"), tooltip: qsTr("Always list this app")},
-                  {value: "mute", label: qsTr("Mute"), tooltip: qsTr("Hide this app in OmaLink")}]
-                value: appRow.rule
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                fontSize: Style.font.caption
-                Accessible.role: Accessible.Grouping
-                Accessible.name: qsTr("Notification rule for %1").arg(appRow.label)
-                onChanged: function(value) { root.setNotificationRule(appRow.key, value, appRow.label) }
+          Text {
+            Layout.fillWidth: true
+            text: phone.freshnessText + (phone.backendVersion !== "" ? " · KDE Connect " + phone.backendVersion : "")
+            textFormat: Text.PlainText
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.Wrap
+          }
+        }
+
+        ColumnLayout {
+          visible: root.showDiagnostics
+          Layout.fillWidth: true
+          spacing: Style.space(8)
+
+          Text {
+            Layout.fillWidth: true
+            text: phone.diagnosticsStatus
+            textFormat: Text.PlainText
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.Wrap
+          }
+
+          Controls.ScrollView {
+            id: diagnosticsScroll
+            Layout.fillWidth: true
+            Layout.preferredHeight: Style.space(160)
+            contentWidth: availableWidth
+            visible: phone.diagnosticsText !== ""
+            clip: true
+
+            Controls.TextArea {
+              width: diagnosticsScroll.availableWidth
+              text: phone.diagnosticsText
+              readOnly: true
+              selectByMouse: true
+              selectionColor: Color.accent
+              selectedTextColor: Color.background
+              background: Rectangle {
+                color: Color.background
+                border.color: Style.normalBorderFor(root.foreground, Color.accent)
+                radius: Style.cornerRadius
               }
+              textFormat: TextEdit.PlainText
+              wrapMode: TextEdit.WrapAnywhere
+              color: root.foreground
+              font.family: "monospace"
+              font.pixelSize: Style.font.caption
+              Accessible.name: qsTr("Redacted connection diagnostics")
             }
           }
 
           Button {
-            visible: Object.keys(root.activePhoneRules).length > 0
-            text: qsTr("Reset app rules for this phone")
+            text: qsTr("Refresh diagnostics")
+            iconText: "󰑐"
+            enabled: !phone.diagnosticsBusy
+            opacity: enabled ? 1.0 : 0.5
+            bordered: true
             focusable: true
-            Accessible.role: Accessible.Button
-            Accessible.name: text
+            fontSize: Style.font.bodySmall
             foreground: root.foreground
             fontFamily: root.fontFamily
-            onClicked: root.resetNotificationRules()
+            Accessible.role: Accessible.Button
+            Accessible.name: text
+            onClicked: phone.loadDiagnostics()
           }
         }
-
       }
     }
   }
