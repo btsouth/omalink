@@ -18,8 +18,10 @@ bash tests/qml.test.sh
 shellcheck -S warning bin/omalink bin/omalink-files tests/*.sh
 ```
 
-These checks need no phone, desktop, session bus, or repository secrets. The QML
-check uses Bash and standard GNU text tools available on Ubuntu. It inspects
+These checks need no phone, desktop, session bus, or repository secrets. The
+notification parity test runs the helper's policy functions with Bash and jq,
+both present on the runner, and compares them with the panel's JavaScript. The
+QML check uses Bash and standard GNU text tools available on Ubuntu. It inspects
 source for unsafe text/image bindings and known invalid properties; it does not
 load QML or replace runtime validation.
 

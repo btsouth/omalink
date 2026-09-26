@@ -5,7 +5,8 @@ const providers = require("../ProviderModel.js")
 const pixel = providers.endpointKey(providers.kdeEndpoint("abc123"))
 const galaxy = providers.endpointKey(providers.kdeEndpoint("def456"))
 
-// Legacy Notification sources behavior is unchanged without rules.
+// Legacy Notification sources behavior matches bin/omalink without rules.
+// tests/notification-parity.test.js runs the same cases through the helper.
 assert.equal(policy.visibleNotifications([
   { appName: "Spotify", isConversation: false },
   { appName: "Messages", isConversation: true }
@@ -19,7 +20,14 @@ assert.equal(policy.visibleNotifications(filterSamples, "signal").length, 1)
 assert.equal(policy.visibleNotifications(filterSamples, "signal, authenticator").length, 2)
 assert.equal(policy.visibleNotifications(filterSamples, "").length, 3)
 assert.equal(policy.visibleNotifications(filterSamples, "  ").length, 3)
-assert.equal(policy.visibleNotifications(filterSamples, " , ,").length, 3)
+assert.equal(policy.visibleNotifications(filterSamples, " , ,").length, 0, "comma-only list allowed everything")
+assert.equal(policy.visibleNotifications(filterSamples, "\u00a0").length, 0, "NBSP is not blank to the helper")
+assert.equal(policy.visibleNotifications(filterSamples, "\u3000").length, 3)
+assert.deepEqual(policy.visibleNotifications(filterSamples, "nomatch\nsignal").map((item) => item.appName), [])
+assert.deepEqual(policy.visibleNotifications([{ appName: "İnstagram" }, { appName: "σας" }], "instagram, ΣΑΣ")
+  .map((item) => item.appName), ["İnstagram"], "case folding differs from the helper")
+assert.deepEqual(policy.visibleNotifications([{ appName: "WhatsApp" }, { appName: "Signal" },
+  { appName: "Localized", packageName: "com.whatsapp" }]).map((item) => item.appName), ["WhatsApp", "Localized"])
 assert.deepEqual(policy.visibleNotifications("nope", "signal"), [])
 // Package-only filters must survive the helper-to-panel boundary.
 assert.deepStrictEqual(policy.visibleNotifications([
@@ -73,7 +81,7 @@ for (const [sources, expected] of [
 ]) assert.deepEqual(ids(policy.visibleNotifications(samples, sources, pixelRules)), expected, String(sources))
 // Another phone keeps the legacy behavior; a name rule never matches a package.
 assert.deepEqual(ids(policy.visibleNotifications(samples, "messages", policy.phoneRules(rules, galaxy))), ["1", "5"])
-assert.deepEqual(ids(policy.visibleNotifications(samples, undefined, policy.phoneRules(rules, galaxy))), ["1", "2", "4", "5"])
+assert.deepEqual(ids(policy.visibleNotifications(samples, undefined, policy.phoneRules(rules, galaxy))), ["1", "2", "5"])
 const nameRules = policy.phoneRules(policy.withRule({}, pixel, "app:Messages", "mute", "Messages"), pixel)
 assert.deepEqual(ids(policy.visibleNotifications(samples, "", nameRules)), ["1", "2", "3", "4", "5"])
 assert.deepEqual(ids(policy.visibleNotifications([{ id: "6", appName: "Messages" }], "", nameRules)), [])
@@ -168,15 +176,19 @@ assert.deepEqual(policy.appRows(null, {}), [])
 
 // Filtered-empty is distinguished from an empty phone, and limits are disclosed.
 const summary = (value) => ({ examined: 0, permitted: 0, hidden: 0, listed: 0, unidentified: 0, scanTruncated: false, apps: [], ...value })
-assert.deepEqual(policy.summaryLines(null, 0), [])
-assert.deepEqual(policy.summaryLines(summary({}), 0), ["No notifications on the phone right now."])
-assert.deepEqual(policy.summaryLines(summary({ examined: 4, hidden: 4 }), 0), ["4 phone notifications are hidden by your filters."])
-assert.deepEqual(policy.summaryLines(summary({ examined: 1, hidden: 1 }), 0), ["1 phone notification is hidden by your filters."])
-assert.deepEqual(policy.summaryLines(summary({ examined: 3, permitted: 3, listed: 3 }), 2), ["1 more hidden by your filters."])
-assert.deepEqual(policy.summaryLines(summary({ examined: 3, permitted: 3, listed: 3 }), 3), [])
-assert.deepEqual(policy.summaryLines(summary({ examined: 100, permitted: 87, hidden: 13, listed: 25, scanTruncated: true }), 25), [
+assert.deepEqual(policy.summaryLines(null, 0, true), [])
+assert.deepEqual(policy.summaryLines(summary({}), 0, true), ["KDE Connect reports no phone notifications right now."])
+assert.deepEqual(policy.summaryLines(summary({ examined: 4, hidden: 4 }), 0, true), ["4 phone notifications are hidden by your filters."])
+assert.deepEqual(policy.summaryLines(summary({ examined: 1, hidden: 1 }), 0, true), ["1 phone notification is hidden by your filters."])
+assert.deepEqual(policy.summaryLines(summary({ examined: 3, permitted: 3, listed: 3 }), 2, true), ["1 more hidden by your filters."])
+assert.deepEqual(policy.summaryLines(summary({ examined: 3, permitted: 3, listed: 3 }), 3, true), [])
+const truncated = summary({ examined: 100, permitted: 87, hidden: 13, listed: 25, scanTruncated: true })
+assert.deepEqual(policy.summaryLines(truncated, 25, true), [
   "13 more hidden by your filters.",
   "Showing 25 of 87 matching. Clear all dismisses all 87 on the phone.",
   "Only the first 100 phone notifications were checked. Clear all stops there too."])
+// Hidden panel content keeps counts but has no Clear all button to describe.
+assert.deepEqual(policy.summaryLines(truncated, 25, false), [
+  "13 more hidden by your filters.", "Showing 25 of 87 matching.", "Only the first 100 phone notifications were checked."])
 
 console.log("notification policy tests passed")

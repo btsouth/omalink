@@ -29,13 +29,14 @@ Panel {
   readonly property var notificationSources: notificationsReady
     ? NotificationPolicy.normalizeSources(phone.selectedDevice.notificationSources) : null
   readonly property var notificationAppRows: notificationsReady ? NotificationPolicy.appRows(notificationSources, activePhoneRules) : []
-  readonly property var notificationSummary: NotificationPolicy.summaryLines(notificationSources, notifications.length)
+  readonly property var notificationSummary: NotificationPolicy.summaryLines(notificationSources, notifications.length, !panelContentHidden)
   readonly property bool notificationSectionVisible: notifications.length > 0 || notificationAppRows.length > 0
     || (notificationSources !== null && notificationSources.examined > 0)
   property bool showNotificationApps: false
   readonly property bool panelContentHidden: settings.panelContent !== undefined
     && String(settings.panelContent) !== "Show"
   onPanelContentHiddenChanged: {
+    syncNotificationApps()
     if (panelContentHidden) {
       notifReplyId = ""
       notifReplyDeviceId = ""
@@ -114,22 +115,40 @@ Panel {
   }
 
   // Rules belong to the selected phone and only change what OmaLink shows.
-  function setNotificationRule(key, state, label, refocus) {
+  function setNotificationRule(key, state, label) {
     if (!Model.validDeviceId(activePhoneId)) return
     var rules = phone.notifyRulesWith(activePhoneId, key, state, label)
     if (rules === null) {
-      phone.actionStatus = qsTr("Could not save this app rule. OmaLink keeps up to 100 app rules across phones.")
+      phone.actionStatus = qsTr("Could not save this app rule. OmaLink keeps up to 100 app rules on up to 16 phones.")
       return
     }
     persistNotificationRules(rules)
-    // The rows are rebuilt from the saved rules; keep keyboard focus on this app.
-    if (refocus) Qt.callLater(function() {
-      for (var i = 0; i < notificationAppRepeater.count; i++) {
-        var row = notificationAppRepeater.itemAt(i)
-        if (row && row.modelData.key === key) row.ruleGroup.forceActiveFocus()
-      }
-    })
   }
+
+  // Rows are updated in place by key, so a rule change or a new notification
+  // does not rebuild them and take keyboard focus away. App names are
+  // notification metadata: the model is emptied while content is hidden.
+  function syncNotificationApps() {
+    var rows = panelContentHidden || !showNotificationApps ? [] : notificationAppRows
+    for (var i = 0; i < rows.length; i++) {
+      var row = {key: rows[i].key, label: rows[i].label, detail: NotificationPolicy.appRowDetail(rows[i]),
+        status: NotificationPolicy.appRowStatus(rows[i]), rule: rows[i].state}
+      var found = -1
+      for (var j = i; j < notificationAppModel.count && found === -1; j++)
+        if (notificationAppModel.get(j).key === row.key) found = j
+      if (found === -1) notificationAppModel.insert(i, row)
+      else {
+        if (found !== i) notificationAppModel.move(found, i, 1)
+        notificationAppModel.set(i, row)
+      }
+    }
+    if (notificationAppModel.count > rows.length)
+      notificationAppModel.remove(rows.length, notificationAppModel.count - rows.length)
+  }
+  onNotificationAppRowsChanged: syncNotificationApps()
+  onShowNotificationAppsChanged: syncNotificationApps()
+
+  ListModel { id: notificationAppModel }
 
   function resetNotificationRules() {
     if (Model.validDeviceId(activePhoneId)) persistNotificationRules(phone.notifyRulesWithout(activePhoneId))
@@ -1240,17 +1259,22 @@ Panel {
           Repeater {
             id: notificationAppRepeater
             objectName: "notificationAppRepeater"
-            model: root.panelContentHidden || !root.showNotificationApps ? [] : root.notificationAppRows
+            model: notificationAppModel
 
             ColumnLayout {
-              required property var modelData
+              id: appRow
+              required property string key
+              required property string label
+              required property string detail
+              required property string status
+              required property string rule
               readonly property Item ruleGroup: ruleButtons
               Layout.fillWidth: true
               spacing: Style.space(2)
 
               Text {
                 Layout.fillWidth: true
-                text: modelData.label
+                text: appRow.label
                 textFormat: Text.PlainText
                 color: root.foreground
                 font.family: root.fontFamily
@@ -1261,7 +1285,7 @@ Panel {
 
               Text {
                 Layout.fillWidth: true
-                text: NotificationPolicy.appRowDetail(modelData) + " · " + NotificationPolicy.appRowStatus(modelData)
+                text: appRow.detail + " · " + appRow.status
                 textFormat: Text.PlainText
                 color: root.dim
                 font.family: root.fontFamily
@@ -1274,13 +1298,13 @@ Panel {
                 options: [{value: "default", label: qsTr("Default"), tooltip: qsTr("Use the Notification sources setting")},
                   {value: "allow", label: qsTr("Allow"), tooltip: qsTr("Always list this app")},
                   {value: "mute", label: qsTr("Mute"), tooltip: qsTr("Hide this app in OmaLink")}]
-                value: modelData.state
+                value: appRow.rule
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 fontSize: Style.font.caption
                 Accessible.role: Accessible.Grouping
-                Accessible.name: qsTr("Notification rule for %1").arg(modelData.label)
-                onChanged: function(value) { root.setNotificationRule(modelData.key, value, modelData.label, ruleButtons.activeFocus) }
+                Accessible.name: qsTr("Notification rule for %1").arg(appRow.label)
+                onChanged: function(value) { root.setNotificationRule(appRow.key, value, appRow.label) }
               }
             }
           }

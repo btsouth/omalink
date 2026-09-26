@@ -64,8 +64,11 @@ Item {
   onNotifyPopupsChanged: restartWatcher()
 
   // A status read started under the old policy may still list a record the
-  // new policy hides. Its result is discarded and read again.
+  // new policy hides. Its result is discarded and read again. Quickshell may
+  // report a run's output and exit in either order, so a new run waits for
+  // both (or briefly for output that never arrives) before replacing it.
   property int statusGeneration: 0
+  property bool statusOutputPending: false
   function notificationPolicyChanged() {
     statusGeneration++
     restartWatcher()
@@ -160,8 +163,9 @@ Item {
   }
 
   function refresh() {
-    if (statusProcess.running) return
+    if (statusProcess.running || statusOutputPending) return
     refreshing = true
+    statusOutputPending = true
     statusProcess.generation = statusGeneration
     statusProcess.command = withNotify([helperPath, "status"])
     statusProcess.running = true
@@ -320,18 +324,31 @@ Item {
     readonly property bool current: generation === root.statusGeneration
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: if (statusProcess.current) root.applyStatus(text)
+      onStreamFinished: {
+        root.statusOutputPending = false
+        statusOutputWait.stop()
+        if (statusProcess.current) root.applyStatus(text)
+        else if (!statusProcess.running) Qt.callLater(root.refresh)
+      }
     }
     onExited: function(exitCode) {
       root.refreshing = false
-      if (!statusProcess.current) {
-        Qt.callLater(root.refresh)
-        return
-      }
+      if (root.statusOutputPending) statusOutputWait.restart()
+      else if (!statusProcess.current) Qt.callLater(root.refresh)
+      if (!statusProcess.current) return
       if (exitCode !== 0) {
         root.statusReady = true
         root.statusFailed = true
       }
+    }
+  }
+
+  Timer {
+    id: statusOutputWait
+    interval: 1000
+    onTriggered: {
+      root.statusOutputPending = false
+      if (!statusProcess.current) root.refresh()
     }
   }
 

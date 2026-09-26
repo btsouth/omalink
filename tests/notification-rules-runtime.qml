@@ -41,7 +41,7 @@ ShellRoot {
   function row(repeater, key) {
     for (var i = 0; i < repeater.count; i++) {
       var item = repeater.itemAt(i)
-      if (item && item.modelData.key === key) return item
+      if (item && item.key === key) return item
     }
     return null
   }
@@ -116,7 +116,7 @@ ShellRoot {
         test.check(test.phone.statusGeneration === generation, "unrelated setting invalidated status")
         panel.showNotificationApps = true
         test.check(test.named(panel, "notificationAppList", 0).visible, "app list not shown")
-        panel.setNotificationRule("pkg:com.example.chat", "allow", "Chat", false)
+        panel.setNotificationRule("pkg:com.example.chat", "allow", "Chat")
         var saved = test.saved.notifyAppRules[test.pixelKey]["pkg:com.example.chat"]
         test.check(saved.state === "allow" && saved.label === "Chat", "allow rule not saved")
         test.check(test.saved.notifyApps === undefined && test.saved.selectedDeviceId === "abc123", "unrelated settings rewritten")
@@ -130,19 +130,22 @@ ShellRoot {
         test.phone.refresh()
         test.check(test.phone.refreshing, "slow status did not start")
         test.watchingRevert = true
-        panel.setNotificationRule("pkg:com.example.chat", "default", "Chat", false)
+        panel.setNotificationRule("pkg:com.example.chat", "default", "Chat")
         test.check(test.saved.notifyAppRules === undefined, "last rule left an empty entry")
+        // The panel applies the helper's source filter itself, so Default hides
+        // Chat at once instead of waiting for the next read.
+        test.check(test.apps(panel.notifications) === "Messages", "Default waited for the helper: " + test.apps(panel.notifications))
         Quickshell.execDetached(["rm", "-f", test.work + "/slow"])
       } else if (test.step === 3) {
         if (test.phone.refreshing || test.appliedAfterRevert === 0) return
         test.check(!test.staleApplied, "status read under the old policy restored a hidden app")
         test.check(test.apps(panel.notifications) === "Messages", "revert not applied: " + test.apps(panel.notifications))
-        panel.setNotificationRule("pkg:com.google.android.apps.messaging", "mute", "Messages", false)
+        panel.setNotificationRule("pkg:com.google.android.apps.messaging", "mute", "Messages")
         test.check(panel.notifications.length === 0, "mute waited for the helper")
         test.check(panel.notificationSectionVisible, "filtered-empty section hidden")
         test.check(panel.notificationSummary[0] === "3 phone notifications are hidden by your filters.",
           "filtered-empty not explained: " + panel.notificationSummary.join("|"))
-        panel.setNotificationRule("app:Signal", "mute", "Signal", false)
+        panel.setNotificationRule("app:Signal", "mute", "Signal")
         test.phone.dismissAllNotifications("abc123")
       } else if (test.step === 4) {
         if (test.phone.actionBusy || test.phone.refreshing) return
@@ -187,9 +190,21 @@ ShellRoot {
         test.check(chat.ruleGroup.activeFocus, "rule control cannot take keyboard focus")
         chat.ruleGroup.changed("mute")
       } else if (test.step === 6) {
-        var rebuilt = test.row(test.named(panel, "notificationAppRepeater", 0), "pkg:com.example.chat")
-        test.check(rebuilt.modelData.state === "mute" && rebuilt.ruleGroup.value === "mute", "keyboard change not applied")
+        var rows = test.named(panel, "notificationAppRepeater", 0)
+        var rebuilt = test.row(rows, "pkg:com.example.chat")
+        test.check(rebuilt.rule === "mute" && rebuilt.ruleGroup.value === "mute", "keyboard change not applied")
         test.check(rebuilt.ruleGroup.activeFocus, "keyboard focus lost after changing a rule")
+        // A new app in the next scan must not rebuild the rows either.
+        var status = JSON.parse(JSON.stringify({schemaVersion: 1, ok: true, installed: true, observedAt: 1,
+          discoveryTruncated: false, backend: {name: "kdeconnect", version: "26.08.1", versionSource: "kdeconnect-cli", available: true},
+          devices: test.phone.devices}))
+        var scan = status.devices[0].notificationSources
+        scan.examined++
+        scan.hidden++
+        scan.apps.unshift({key: "pkg:com.example.added", appName: "Added", packageName: "com.example.added", count: 1, permitted: false, sourceAllowed: false})
+        test.phone.applyStatus(JSON.stringify(status))
+        test.check(rows.count === 4 && test.row(rows, "pkg:com.example.chat") === rebuilt, "a new scan rebuilt the rows")
+        test.check(rebuilt.ruleGroup.activeFocus, "keyboard focus lost when a new app appeared")
         panel.resetNotificationRules()
         test.check(test.saved.notifyAppRules === undefined && Object.keys(panel.activePhoneRules).length === 0, "reset kept rules")
       } else if (test.step === 7) {

@@ -142,6 +142,7 @@ case "${*: -1}" in
     printf '%s\n' '{"type":"s","data":"reply-uuid.1"}'
     ;;
   activeNotifications)
+    [[ -z ${OMALINK_TEST_NOTIFICATIONS_FAIL:-} ]] || exit 1
     if [[ -n ${OMALINK_TEST_MANY_NOTIFICATIONS:-} ]]; then
       printf '{"type":"as","data":[['
       for index in $(seq 1 300); do printf '"notif.%s",' "$index"; done
@@ -418,6 +419,9 @@ bare_status="$(OMALINK_TEST_BARE_ID=1 PATH="$temp_dir:/usr/bin" "$project_dir/bi
 jq -e '(.devices[0].notifications | map(select(.appName == "Visual Voicemail")) | .[0].packageName) == ""
   and (.devices[0].notificationSources.apps | map(.key)) == ["pkg:com.azure.authenticator", "pkg:com.google.android.apps.messaging", "app:Visual Voicemail"]
   and (.devices[1].notifications | map(.appName) | index("Visual Voicemail")) == null' <<<"$bare_status" >/dev/null
+# A failed list read is unknown, not a phone without notifications.
+failed_list="$(OMALINK_TEST_NOTIFICATIONS_FAIL=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" status)"
+jq -e '.devices[0].notificationSources == null and .devices[0].notifications == []' <<<"$failed_list" >/dev/null
 # Phone app names that look like jq options stay data.
 option_names="$(OMALINK_TEST_OPTION_NAMES=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --notify-apps "" status)"
 jq -e '(.devices[0].notifications | map(.appName)) == ["-h", "--rawfile", "Visual Voicemail", "Authenticator"]
@@ -725,13 +729,19 @@ fi
 [[ "$(grep -c '^notify ' "$temp_dir/notify-send.log")" == 2 ]]
 grep -q 'ipc call omalink.phone.DP-9 open' "$temp_dir/qs.log"
 : >"$temp_dir/notify-send.log"
-# Popup workers receive the same rules: a muted app never pops up.
+# Popup workers receive the same rules: a muted app never pops up, and its
+# title and text are never read.
+: >"$temp_dir/busctl.content.log"
 muted_out="$(XDG_RUNTIME_DIR="$temp_dir" XDG_CONFIG_HOME="$temp_dir/xdg" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" \
   --notify-rules '{"abc123":{"pkg:com.azure.authenticator":"mute"}}' watch)"
 [[ $muted_out == "$watch_out" ]]
 [[ "$(grep -c '^notify ' "$temp_dir/notify-send.log")" == 1 ]]
 if grep -q 'Authenticator' "$temp_dir/notify-send.log"; then
   echo "a muted app reached a popup" >&2; exit 1
+fi
+grep -q '/notif\.9 .* title$' "$temp_dir/busctl.content.log"
+if grep -q '/notif\.11 ' "$temp_dir/busctl.content.log"; then
+  echo "a muted popup read notification content" >&2; exit 1
 fi
 : >"$temp_dir/notify-send.log"
 quiet_out="$(XDG_RUNTIME_DIR="$temp_dir" XDG_CONFIG_HOME="$temp_dir/xdg" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --popups off watch)"

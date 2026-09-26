@@ -164,18 +164,46 @@ function helperArgument(rules) {
   return keys.length > 0 ? JSON.stringify(policy) : ""
 }
 
+// The legacy source filter, mirroring notification_allowed in bin/omalink
+// under its fixed C.UTF-8 locale. The helper filters first, so any difference
+// here would leave a record listed that the helper now hides.
+var builtinPackages = ["com.google.android.apps.messaging", "com.samsung.android.messaging", "com.android.messaging",
+  "com.android.mms", "com.azure.authenticator", "com.google.android.apps.authenticator2", "com.whatsapp"]
+var builtinApps = ["messages", "google messages", "samsung messages", "messaging", "authenticator",
+  "microsoft authenticator", "google authenticator", "whatsapp"]
+// glibc's [[:space:]] in C.UTF-8. It excludes U+00A0, U+2007 and U+202F.
+var blank = /^[\t\n\v\f\r \u1680\u2000-\u2006\u2008-\u200a\u2028\u2029\u205f\u3000]*$/
+var edges = /^[\t\n\v\f\r \u1680\u2000-\u2006\u2008-\u200a\u2028\u2029\u205f\u3000]+|[\t\n\v\f\r \u1680\u2000-\u2006\u2008-\u200a\u2028\u2029\u205f\u3000]+$/g
+
+// bash lowercases one character at a time, so a multi-character lowercase
+// form (U+0130) keeps its first code point and final sigma is not contextual.
+function helperLower(value) {
+  var result = ""
+  for (var i = 0; i < value.length; i++) {
+    var code = value.codePointAt(i)
+    if (code > 0xffff) i++
+    result += String.fromCodePoint(String.fromCodePoint(code).toLowerCase().codePointAt(0))
+  }
+  return result
+}
+
+// null: no configured list. true: a blank list, which allows everything.
+// Otherwise the lowercase terms, possibly none, as with a comma-only list.
+// argv ends at NUL and bash's read stops at the first newline.
 function sourceTerms(sources) {
   if (typeof sources !== "string") return null
-  return sources.split(",").map(function(term) { return term.trim().toLowerCase() })
+  var value = sources.split("\u0000")[0]
+  if (blank.test(value)) return true
+  return value.split("\n")[0].split(",").map(function(term) { return helperLower(term).replace(edges, "") })
     .filter(function(term) { return term.length > 0 })
 }
 
 function sourceAllowed(notification, terms) {
-  var packageName = String(notification.packageName || "").toLowerCase()
-  var app = String(notification.appName || "").toLowerCase()
-  // No configured list keeps the historical spotify filter for older configs.
-  if (!terms) return !(app === "spotify" && !notification.isConversation)
-  return terms.length === 0 || terms.some(function(term) { return app.indexOf(term) !== -1 || packageName.indexOf(term) !== -1 })
+  var packageName = helperLower(String(notification.packageName || ""))
+  var app = helperLower(String(notification.appName || ""))
+  if (terms === true) return true
+  if (!terms) return builtinPackages.indexOf(packageName) !== -1 || builtinApps.indexOf(app) !== -1
+  return terms.some(function(term) { return app.indexOf(term) !== -1 || packageName.indexOf(term) !== -1 })
 }
 
 function permitted(notification, terms, rules) {
@@ -257,19 +285,21 @@ function appRowStatus(row) {
 }
 
 // Explains an empty or partial list without implying anything about the
-// phone's installed apps or permissions.
-function summaryLines(sources, visibleCount) {
+// phone's installed apps or permissions. Clear all is only mentioned while the
+// panel offers it.
+function summaryLines(sources, visibleCount, clearAvailable) {
   if (!sources) return []
   var lines = []
   var hidden = sources.hidden + Math.max(0, sources.listed - visibleCount)
-  if (sources.examined === 0) lines.push("No notifications on the phone right now.")
+  if (sources.examined === 0) lines.push("KDE Connect reports no phone notifications right now.")
   else if (visibleCount === 0 && hidden > 0)
     lines.push(hidden === 1 ? "1 phone notification is hidden by your filters." : hidden + " phone notifications are hidden by your filters.")
   else if (hidden > 0) lines.push(hidden + " more hidden by your filters.")
   if (sources.permitted > sources.listed && visibleCount > 0)
-    lines.push("Showing " + visibleCount + " of " + sources.permitted + " matching. Clear all dismisses all " + sources.permitted + " on the phone.")
+    lines.push("Showing " + visibleCount + " of " + sources.permitted + " matching."
+      + (clearAvailable ? " Clear all dismisses all " + sources.permitted + " on the phone." : ""))
   if (sources.scanTruncated)
-    lines.push("Only the first " + scanLimit + " phone notifications were checked. Clear all stops there too.")
+    lines.push("Only the first " + scanLimit + " phone notifications were checked." + (clearAvailable ? " Clear all stops there too." : ""))
   return lines
 }
 

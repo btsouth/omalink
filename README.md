@@ -228,8 +228,8 @@ package), or clear the field to allow every notification. **Notification
 popups** can be set to Off to keep matching notifications listed in the panel
 without desktop popups.
 
-Select **Apps** next to the panel's notification count to set rules per app for
-the selected phone. The list shows apps in the phone's current notifications
+Select **Notification apps** under the panel's phone notifications to set rules
+per app for the selected phone. The list shows apps in the phone's current notifications
 (from the first 100 checked) plus any app that already has a rule. It is not a
 list of installed apps. **Allow** always lists an app, **Mute** hides it from
 the panel, popups and **Clear all**, and **Default** follows **Notification
@@ -237,7 +237,7 @@ sources**. A mute wins over any source setting. Rules only change what OmaLink
 shows; the phone and KDE Connect are unchanged. Apps are matched by Android
 package when the phone reports one. Otherwise they are matched by name only,
 which the phone chooses and other apps may share. OmaLink keeps up to 100 rules
-across all phones. **Clear all** dismisses every matching notification OmaLink
+on up to 16 phones. **Clear all** dismisses every matching notification OmaLink
 checked, up to 100, including ones beyond the 25 listed.
 
 Set **Panel message content** to **Hide** to remove unread message previews and

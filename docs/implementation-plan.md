@@ -391,10 +391,11 @@ Exact Allow/Mute rules are stored per KDE endpoint key in `notifyAppRules` (at
 most 100 rules across 16 phones) and passed as one bounded `--notify-rules`
 argument to status, the watcher's popup workers and dismiss-all. Precedence is
 exact mute, exact allow, then the unchanged `notifyApps` string, in both the
-helper and `NotificationPolicy.js`. Policy changes discard in-flight status
-reads. The panel list shows current and ruled apps, explains filtered-empty and
+helper and `NotificationPolicy.js`; the helper runs under a fixed C.UTF-8
+locale and a parity test runs one decision table through both. Policy changes
+discard in-flight status reads. The panel list shows current and ruled apps, explains filtered-empty and
 truncated lists, and follows Panel message content. Evidence: Node policy
-matrix, CLI discovery/parity/bounds tests, actual Panel/Service runtime tests in
+matrix, helper/panel parity, CLI discovery/parity/bounds tests, actual Panel/Service runtime tests in
 omabox and dark/light inspection at 1366x768. No Android hardware check yet.
 
 - [x] List observed app identities with per-app enable/mute rather than requiring

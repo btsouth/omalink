@@ -2,6 +2,9 @@
 
 set -euo pipefail
 umask 077
+# Phone text is UTF-8. A fixed locale keeps truncation, case folding and regex
+# ranges the same on every system and identical to NotificationPolicy.js.
+export LC_ALL=C.UTF-8
 kdeconnect_service=org.kde.kdeconnect
 original_args=("$@")
 
@@ -454,6 +457,11 @@ notification_json() {
 
   raw="$(dbus_bounded 5s busctl --user --json=short call -- "$kdeconnect_service" \
     "$notification_root" org.kde.kdeconnect.device.notifications activeNotifications)"
+  # A failed read is unknown, not a phone without notifications.
+  if ! jq -e '.data[0] | type == "array"' <<<"$raw" >/dev/null 2>&1; then
+    printf '%s\n' '{"notifications":[],"sources":null}'
+    return 0
+  fi
   while IFS= read -r notification_id; do
     if (( read_count >= notifications_read_max )); then scan_truncated=true; break; fi
     read_count=$((read_count + 1))
@@ -530,11 +538,11 @@ load_notify_rules() {
   local device identity state
   [[ -n $NOTIFY_RULES_SET ]] || return 0
   (( $(printf '%s' "$NOTIFY_RULES" | wc -c) <= notify_rules_max_bytes )) || usage
-  jq -e 'type == "object"' <<<"$NOTIFY_RULES" >/dev/null 2>&1 || usage
+  jq -e -s 'length == 1 and (.[0] | type == "object")' <<<"$NOTIFY_RULES" >/dev/null 2>&1 || usage
   while IFS= read -r -d '' device && IFS= read -r -d '' identity && IFS= read -r -d '' state; do
     notify_rules["$device|$identity"]="$state"
   done < <(jq -j '
-    to_entries[:16][] | select(.key | test("^[A-Za-z0-9]{1,128}$")) | .key as $device
+    to_entries[:16][] | select(.key | test("\\A[A-Za-z0-9]{1,128}\\z")) | .key as $device
     | .value | objects | to_entries[:100][]
     | select((.value == "allow" or .value == "mute") and (.key | length <= 260)
         and (.key | test("^(pkg|app):.")) and (.key | explode | all(. > 31 and . != 127)))
