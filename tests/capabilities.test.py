@@ -120,7 +120,9 @@ else: sys.exit(1)
             result = run(*command, mode=mode)
             assert result.returncode != 0 and not (root / 'sent').exists(), (command, mode)
         result = run(*command)
-        assert result.returncode == 0, (command, result.stderr)
-        assert (root / 'sent').exists()
+        # Legacy argv content entry points fail closed; private D-Bus sends
+        # and capability checks are covered by text-transport.test.py.
+        assert result.returncode == 2, (command, result.stderr)
+        assert not (root / 'sent').exists()
 
 print('capability and diagnostics tests passed')

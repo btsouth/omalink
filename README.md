@@ -39,12 +39,14 @@ account or cloud relay.
 
 - Omarchy 4.0 or newer
 - An Android phone with [KDE Connect](https://kdeconnect.kde.org/) installed
-- `kdeconnect` and `jq` on the Omarchy computer
+- `kdeconnect`, `jq`, and `python-dbus` on the Omarchy computer
 - The standard Omarchy tools from `bash`, `coreutils`, `util-linux`, `systemd`,
   `dbus`, `libnotify`, `xdg-utils`, `findutils`, `gawk`, `grep`, and `sed`
 
-Qt and Quickshell come with Omarchy. Python and Node.js are development test
-requirements only; the plugin does not use them at runtime.
+Qt and Quickshell come with Omarchy. Text and messaging use the system Python
+interpreter at `/usr/bin/python3` and its `dbus` module, provided by Arch
+`python-dbus`. A virtual environment or mise Python does not supply this runtime
+dependency. Node.js is only needed for development tests.
 
 ## Install
 
@@ -54,10 +56,10 @@ Install and enable OmaLink:
 omarchy plugin add https://github.com/btsouth/omalink.git --enable
 ```
 
-If KDE Connect is not installed yet:
+Install any missing dependencies:
 
 ```sh
-omarchy pkg add kdeconnect jq
+omarchy pkg add kdeconnect jq python-dbus
 ```
 
 Open OmaLink from the bar, choose **Open pairing**, and approve the computer in
@@ -235,9 +237,13 @@ untrusted input. OmaLink applies these checks before displaying or opening them:
   Thumbnails are capped at 256 KiB of encoded data. Titles and previews are
   capped at 1 KiB, message bodies at 8 KiB, and names at 256 characters. Contact
   reads are bounded by file count and bytes and return at most 2000 numbers.
-- Commands use argument arrays and validated identifiers. Global options are
-  parsed before the command, so message text that resembles an option remains
-  literal text. D-Bus options end at `--`.
+- Commands use argument arrays and validated identifiers. Text, URLs, message
+  recipients and reply bodies travel through a private stdin pipe and direct
+  D-Bus calls, never command arguments, environment variables or body files.
+  Requests are limited to 64 KiB of JSON and 8 KiB of UTF-8 text with a 20-second
+  deadline. Exact text is preserved, including leading spaces and line breaks.
+  Only a complete whitespace-free HTTP(S) URL uses the URL-sharing method.
+  Other text uses text sharing. Non-content D-Bus CLI options end at `--`.
 - Opening or saving an attachment requires a validated local cache file no
   larger than 2 GiB. Executable files, scripts, and desktop entries are refused.
   Opening additionally refuses web pages and shortcuts. An unavailable MIME
@@ -271,27 +277,62 @@ dropped when the Messages window closes.
 
 ## Development
 
-Run the checks in an isolated desktop with [omabox](https://github.com/btsouth/omabox):
+Run the checks in an isolated desktop with [omabox](https://github.com/btsouth/omabox).
+The private D-Bus fixture also needs the development-only `python-gobject` package:
 
 ```sh
 node tests/model.test.js
 node tests/send-state.test.js
 node tests/capabilities.test.js
 node tests/file-share-model.test.js
+node tests/private-text.test.js
 bash tests/qml.test.sh
 shellcheck -S warning bin/omalink bin/omalink-files tests/*.sh
 omabox run -- omarchy plugin validate .
 omabox run -- bash tests/cli.test.sh
-omabox run -- python tests/audit.test.py
-omabox run -- python tests/capabilities.test.py
+omabox run -- /usr/bin/python3 tests/audit.test.py
+omabox run -- /usr/bin/python3 tests/capabilities.test.py
+omabox run --net isolated -- /usr/bin/python3 tests/text-transport.test.py
 omabox run -- bash tests/files.test.sh
 omabox run -- bash tests/runtime.test.sh
 omabox run -- bash tests/selection-runtime.test.sh
 omabox run -- bash tests/send-runtime.test.sh
+omabox run -- bash tests/private-request-runtime.test.sh
 omabox run -- bash tests/file-share-runtime.test.sh
 ```
 
-The test suite uses mock phone data and does not send messages.
+The test suite uses mock phone data and does not send real messages. The text
+transport suite requires omabox and registers a mock KDE Connect service on its
+private session bus. It checks actual D-Bus argument types, exact content,
+preflight rejection, daemon ownership, uncertain outcomes, dependency absence,
+the stdin deadline, and process arguments while dispatch is pending.
+
+### Text helper protocol
+
+Scripts that previously called `bin/omalink share`, `sms`, `reply`, or
+`notify-reply` must migrate to `bin/omalink text-stdin`. Those old commands now
+reject content arguments instead of forwarding them. Send one JSON object on
+standard input and close the pipe:
+
+```json
+{"version":1,"operation":"sms","deviceId":"PHONE_ID","destination":"+15550000001","body":"Hello"}
+```
+
+The common fields are `version`, `operation`, `deviceId`, and `body`. `share`
+needs only those fields; `sms` adds `destination`, `reply` adds a decimal string
+`threadId`, and `notify-reply` adds `replyId`. Unknown or duplicate fields are
+rejected. Write the object directly from the calling application to the child
+process stdin; do not put real content in shell command arguments or temporary
+files to construct it.
+
+The helper returns one JSON object with `version: 1`, `ok`, `state`, `code`, and
+`statusText`. Exit 0 with `accepted` means KDE Connect accepted the request,
+not that the phone delivered it. `not-submitted` means validation or preflight
+prevented dispatch. `unconfirmed` means dispatch began but its outcome is unknown.
+Failures exit 1. Check the phone before intentionally retrying an uncertain
+request; there are no automatic retries. A missing `python-dbus` dependency
+returns `not-submitted` with code `dependency` and never falls back to command
+arguments.
 
 ## Roadmap
 

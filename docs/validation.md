@@ -33,14 +33,19 @@ Do not run these suites directly against the user's desktop or session bus.
 ```sh
 omabox run -- omarchy plugin validate .
 omabox run -- bash tests/cli.test.sh
-omabox run -- python tests/audit.test.py
-omabox run -- python tests/capabilities.test.py
+omabox run -- /usr/bin/python3 tests/audit.test.py
+omabox run -- /usr/bin/python3 tests/capabilities.test.py
 omabox run -- bash tests/files.test.sh
 omabox run -- bash tests/runtime.test.sh
 omabox run -- bash tests/selection-runtime.test.sh
 omabox run -- bash tests/send-runtime.test.sh
 omabox run -- bash tests/file-share-runtime.test.sh
+omabox run -- bash tests/private-request-runtime.test.sh
+omabox run -- /usr/bin/python3 tests/text-transport.test.py
 ```
+
+The direct D-Bus transport fixture needs the development-only `python-gobject`
+package in addition to the runtime `python-dbus` dependency.
 
 These suites use fake phone data and controlled transports. They cover helper
 boundaries, capabilities, selected-phone routing, stale replies, message

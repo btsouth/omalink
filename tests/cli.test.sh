@@ -428,15 +428,10 @@ grep -q 'setVolume .*volume i 65' "$temp_dir/busctl.log"
 grep -q 'seek .*i 5156' "$temp_dir/busctl.log"
 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" ring abc123 >/dev/null
 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" clipboard abc123 >/dev/null
-PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" share abc123 "hello phone" >/dev/null
-PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" share abc123 "https://omalink.app" >/dev/null
 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" dismiss abc123 notification-1 >/dev/null
 : >"$temp_dir/busctl.log"
 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" dismiss-all abc123 >/dev/null
 [[ "$(grep -c '/notifications/notif\.' "$temp_dir/busctl.log")" == 3 ]]
-PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" reply abc123 7 "Test reply" >/dev/null
-PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" notify-reply abc123 reply-uuid.1 "Quick reply" >/dev/null
-PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" sms abc123 +15550000001 "New message" >/dev/null
 contacts="$(XDG_DATA_HOME="$temp_dir/data" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" contacts abc123)"
 jq -e 'length == 1 and .[0].name == "Alex Rivera" and .[0].number == "+15550000001"' <<<"$contacts" >/dev/null
 long_name_contacts="$(XDG_DATA_HOME="$temp_dir/data-longname" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" contacts abc123)"
@@ -594,6 +589,9 @@ expect_usage attachment abc123 42 '--host=attacker@evil.example'
 expect_usage attachment abc123 42 '-1'
 expect_usage dismiss abc123 '--user'
 expect_usage notify-reply abc123 '--user' 'hi'
+expect_usage share abc123 "private text"
+expect_usage sms abc123 +15550000001 "private text"
+expect_usage reply abc123 7 "private text"
 expect_usage ring '--user'
 expect_usage clipboard '--user'
 if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" media '../bad' >/dev/null 2>&1; then

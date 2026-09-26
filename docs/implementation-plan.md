@@ -180,17 +180,21 @@ model module, helper error/result output, and tests. Do not add new transports.
 - [x] Keep pending-send state scoped to its original endpoint/thread. When the
   message window closes, preserve the existing no-persistent-body policy and
   explain that an already submitted send may still finish.
-- [ ] Prefer stdin/private bounded pipes for new content-bearing helper calls.
-  Migrate existing message-body arguments in a bounded separate commit if needed.
+- [x] Use bounded private stdin pipes for text, URLs and message/reply sends,
+  followed by direct Python D-Bus calls. Remove the legacy content-bearing argv
+  commands, check daemon ownership before dispatch, and report missing runtime
+  dependencies without a fallback. Limits: 64 KiB envelope, 8 KiB UTF-8 body,
+  20-second deadline. Process arguments and environment are checked in omabox.
 
 Acceptance: success with delayed history, definite rejection, lost response,
 history never arriving, repeated identical messages, window close/reopen,
 disconnect mid-send and late completion. Assert no automatic duplicate calls.
 Only identify delivery/read receipts if the backend really reports them.
 
-Implemented in a separate messaging slice. Nonzero transport exits are
-conservatively unconfirmed because the helper cannot prove non-dispatch; only
-local validation establishes not submitted. Reconciliation is bounded to six
+Implemented in a separate messaging slice, followed by private transport
+hardening. Validated helper results now distinguish preflight rejection from an
+unknown outcome after dispatch. Missing, malformed or interrupted results remain
+conservatively unconfirmed. Reconciliation is bounded to six
 extra reads and a 30-second observation window. Exact text/time matching also
 requires a previously loaded thread snapshot and rejects prior/future records;
 it is correlation, not backend message identity or a delivery receipt. New or

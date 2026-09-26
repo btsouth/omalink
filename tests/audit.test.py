@@ -135,12 +135,13 @@ sys.exit(result.returncode)
     assert [item['body'] for item in json.loads(result.stdout)] == ['right phone']
     no_children()
 
-    # Message text equal to a global flag must arrive verbatim.
+    # Content-bearing argv commands fail closed. The stdin transport suite
+    # checks verbatim flag-like bodies without exposing them to subprocesses.
     for message in ('--popups', '--notify-apps', '$(touch /tmp/never)'):
+        before = (root / 'args').read_text()
         result = run('reply', 'abc123', '7', message)
-        assert result.returncode == 0, result.stderr
-        args = json.loads((root / 'args').read_text().splitlines()[-1])
-        assert args[-2] == message, args
+        assert result.returncode == 2, result.stderr
+        assert (root / 'args').read_text() == before
     assert run('--popups', 'invalid', 'status').returncode == 2
     result = run('media-seek', 'abc123', '001000')
     assert result.returncode == 0, result.stderr

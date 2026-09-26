@@ -6,7 +6,7 @@ kdeconnect_service=org.kde.kdeconnect
 original_args=("$@")
 
 usage() {
-  echo "Usage: omalink [--notify-apps \"App, Package\"] [--popups on|off] <status|diagnostics|watch|media|media-action|media-volume|media-seek|ring|clipboard|share|dismiss|dismiss-all|notify-reply|contacts|conversations|messages|attachment|attachment-open|attachment-save|reply|sms|seen|mark-seen> [arguments]" >&2
+  echo "Usage: omalink [--notify-apps \"App, Package\"] [--popups on|off] <status|diagnostics|watch|media|media-action|media-volume|media-seek|ring|clipboard|text-stdin|dismiss|dismiss-all|contacts|conversations|messages|attachment|attachment-open|attachment-save|seen|mark-seen> [arguments]" >&2
   exit 2
 }
 
@@ -597,20 +597,6 @@ send_clipboard() {
   timeout --kill-after=1s 10s kdeconnect-cli --device "$device_id" --send-clipboard
 }
 
-share_text() {
-  local device_id="${1:-}" value="${2:-}"
-  [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ && -n $value ]] || usage
-  command -v kdeconnect-cli >/dev/null 2>&1 || {
-    echo "KDE Connect is not installed" >&2
-    exit 1
-  }
-  if [[ $value =~ ^https?:// ]]; then
-    timeout --kill-after=1s 10s kdeconnect-cli --device "$device_id" --share "$value"
-  else
-    timeout --kill-after=1s 10s kdeconnect-cli --device "$device_id" --share-text "$value"
-  fi
-}
-
 media() {
   local device_id="${1:-}"
   [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ ]] || usage
@@ -787,15 +773,6 @@ watch() {
   done <"$work/signals"
   for pid in "${workers[@]}"; do wait "$pid" || true; done
   exit 0
-}
-
-notify_reply() {
-  local device_id="${1:-}" reply_id="${2:-}" message="${3:-}"
-  [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ && $reply_id =~ ^[A-Za-z0-9_][A-Za-z0-9._:-]{0,127}$ && $reply_id != -* && -n $message ]] || usage
-  require_messaging_capability "$device_id" kdeconnect_notifications || return 1
-  timeout --kill-after=1s 10s busctl --user call -- "$kdeconnect_service" \
-    "/modules/kdeconnect/devices/$device_id/notifications" \
-    org.kde.kdeconnect.device.notifications sendReply ss "$reply_id" "$message" >/dev/null
 }
 
 dismiss_all_notifications() {
@@ -1167,16 +1144,6 @@ open_attachment() {
   disown 2>/dev/null || true
 }
 
-reply() {
-  local device_id="${1:-}" thread_id="${2:-}" message="${3:-}"
-  [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ && $thread_id =~ ^[0-9]+$ && -n $message ]] || usage
-  require_messaging_capability "$device_id" kdeconnect_sms || return 1
-  timeout --kill-after=1s 10s busctl --user call -- "$kdeconnect_service" \
-    "/modules/kdeconnect/devices/$device_id" \
-    org.kde.kdeconnect.device.conversations replyToConversation \
-    xsav "$thread_id" "$message" 0 >/dev/null
-}
-
 # KDE Connect has no way to mark a conversation read on the phone, so OmaLink
 # keeps its own "seen" state: threadId -> last seen message timestamp. A
 # conversation counts as unread only while the phone flags it unread AND its
@@ -1220,16 +1187,6 @@ mark_seen() {
   ) 9>"$file.lock"
 }
 
-send_sms() {
-  local device_id="${1:-}" destination="${2:-}" message="${3:-}" digits
-  digits="${destination//[^0-9]/}"
-  [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ && $destination =~ ^[+0-9().[:space:]-]+$ && ${#digits} -ge 3 && -n $message ]] || usage
-  require_messaging_capability "$device_id" kdeconnect_sms || return 1
-  # The CLI resolves the well-known owner itself. A restart after preflight can
-  # still race this call; a failure remains an unknown outcome, never a retry.
-  timeout --kill-after=1s 10s kdeconnect-cli --device "$device_id" --send-sms "$message" --destination "$destination"
-}
-
 NOTIFY_APPS_SET=""
 NOTIFY_APPS=""
 NOTIFY_POPUPS="on"
@@ -1266,18 +1223,22 @@ case "${1:-}" in
   media-seek) shift; media_seek "${1:-}" "${2:-}" ;;
   ring) shift; ring "${1:-}" ;;
   clipboard) shift; send_clipboard "${1:-}" ;;
-  share) shift; share_text "${1:-}" "${2:-}" ;;
+  text-stdin)
+    (( $# == 1 )) || usage
+    exec /usr/bin/python3 "$(dirname -- "$(readlink -f -- "$0")")/omalink-text"
+    ;;
+  share | sms | reply | notify-reply)
+    echo "Text arguments are no longer supported; use text-stdin with a JSON request" >&2
+    exit 2
+    ;;
   dismiss) shift; dismiss_notification "${1:-}" "${2:-}" ;;
   dismiss-all) shift; dismiss_all_notifications "${1:-}" ;;
-  notify-reply) shift; notify_reply "${1:-}" "${2:-}" "${3:-}" ;;
   contacts) shift; contacts "${1:-}" ;;
   conversations) shift; conversations "${1:-}" ;;
   messages) shift; messages "${1:-}" "${2:-}" ;;
   attachment) shift; attachment "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
   attachment-open) shift; open_attachment "${1:-}" ;;
   attachment-save) shift; attachment_save "${1:-}" ;;
-  reply) shift; reply "${1:-}" "${2:-}" "${3:-}" ;;
-  sms) shift; send_sms "${1:-}" "${2:-}" "${3:-}" ;;
   seen) seen "${2:-}" ;;
   mark-seen) shift; mark_seen "$@" ;;
   *) usage ;;
