@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import "Model.js" as Model
+import "NotificationPolicy.js" as NotificationPolicy
 import "ProviderModel.js" as Providers
 
 Item {
@@ -47,16 +48,44 @@ Item {
   readonly property var notifySources: settings && settings["notifyApps"] !== undefined && settings["notifyApps"] !== null
     ? String(settings["notifyApps"]) : undefined
   readonly property string notifyPopups: String(setting("notifyPopups", "On")).toLowerCase() === "off" ? "off" : "on"
+  readonly property var notifyRules: NotificationPolicy.normalizeRules(setting("notifyAppRules", null))
+  readonly property string notifyRulesArgument: NotificationPolicy.helperArgument(notifyRules)
   readonly property bool mediaControls: String(setting("mediaControls", "On")).toLowerCase() !== "off"
   readonly property string pluginDir: Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "").replace(/\/$/, "")
   readonly property string helperPath: pluginDir + "/bin/omalink"
 
   function withNotify(command) {
     return [helperPath, "--popups", notifyPopups].concat(
-      notifySources !== undefined ? ["--notify-apps", notifySources] : [], command.slice(1))
+      notifySources !== undefined ? ["--notify-apps", notifySources] : [],
+      notifyRulesArgument !== "" ? ["--notify-rules", notifyRulesArgument] : [], command.slice(1))
   }
-  onNotifySourcesChanged: restartWatcher()
+  onNotifySourcesChanged: notificationPolicyChanged()
+  onNotifyRulesArgumentChanged: notificationPolicyChanged()
   onNotifyPopupsChanged: restartWatcher()
+
+  // A status read started under the old policy may still list a record the
+  // new policy hides. Its result is discarded and read again. Quickshell may
+  // report a run's output and exit in either order, so after an exit a new run
+  // waits briefly for that output. A process that never started blocks nothing.
+  property int statusGeneration: 0
+  property bool statusOutputPending: false
+  function notificationPolicyChanged() {
+    statusGeneration++
+    restartWatcher()
+  }
+
+  function notifyRulesFor(deviceId) {
+    return NotificationPolicy.phoneRules(notifyRules, Providers.endpointKey(Providers.kdeEndpoint(deviceId)))
+  }
+
+  // The complete new rule set for settings, or null when a limit is reached.
+  function notifyRulesWith(deviceId, key, state, label) {
+    return NotificationPolicy.withRule(notifyRules, Providers.endpointKey(Providers.kdeEndpoint(deviceId)), key, state, label)
+  }
+
+  function notifyRulesWithout(deviceId) {
+    return NotificationPolicy.withoutPhone(notifyRules, Providers.endpointKey(Providers.kdeEndpoint(deviceId)))
+  }
 
   function restartWatcher() {
     watchProcess.running = false
@@ -134,8 +163,10 @@ Item {
   }
 
   function refresh() {
-    if (statusProcess.running) return
+    if (statusProcess.running || statusOutputWait.running) return
     refreshing = true
+    statusOutputPending = true
+    statusProcess.generation = statusGeneration
     statusProcess.command = withNotify([helperPath, "status"])
     statusProcess.running = true
   }
@@ -289,16 +320,35 @@ Item {
 
   Process {
     id: statusProcess
+    property int generation: -1
+    readonly property bool current: generation === root.statusGeneration
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: root.applyStatus(text)
+      onStreamFinished: {
+        root.statusOutputPending = false
+        statusOutputWait.stop()
+        if (statusProcess.current) root.applyStatus(text)
+        else if (!statusProcess.running) Qt.callLater(root.refresh)
+      }
     }
     onExited: function(exitCode) {
       root.refreshing = false
+      if (root.statusOutputPending) statusOutputWait.restart()
+      else if (!statusProcess.current) Qt.callLater(root.refresh)
+      if (!statusProcess.current) return
       if (exitCode !== 0) {
         root.statusReady = true
         root.statusFailed = true
       }
+    }
+  }
+
+  Timer {
+    id: statusOutputWait
+    interval: 1000
+    onTriggered: {
+      root.statusOutputPending = false
+      if (!statusProcess.current) root.refresh()
     }
   }
 

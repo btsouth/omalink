@@ -228,9 +228,22 @@ package), or clear the field to allow every notification. **Notification
 popups** can be set to Off to keep matching notifications listed in the panel
 without desktop popups.
 
+Select **Notification apps** under the panel's phone notifications to set rules
+per app for the selected phone. The list shows apps in the phone's current notifications
+(from the first 100 checked) plus any app that already has a rule. It is not a
+list of installed apps. **Allow** always lists an app, **Mute** hides it from
+the panel, popups and **Clear all**, and **Default** follows **Notification
+sources**. A mute wins over any source setting. Rules only change what OmaLink
+shows; the phone and KDE Connect are unchanged. Apps are matched by Android
+package when the phone reports one. Otherwise they are matched by name only,
+which the phone chooses and other apps may share. OmaLink keeps up to 100 rules
+on up to 16 phones. **Clear all** dismisses every matching notification OmaLink
+checked, up to 100, including ones beyond the 25 listed.
+
 Set **Panel message content** to **Hide** to remove unread message previews and
 notification rows from the panel, including app names, icons and reply controls.
-Counts remain visible. Changing to Hide clears an unsent panel notification reply.
+Counts remain visible, and the per-app list is hidden too. Changing to Hide
+clears an unsent panel notification reply.
 This is a display preference: existing bounded reads still run, Messages opened
 explicitly can show conversations, and KDE Connect or other apps are unaffected.
 Use **Notification popups: Off** separately to suppress OmaLink's app-name popups.
@@ -253,8 +266,10 @@ untrusted input. OmaLink applies these checks before displaying or opening them:
   30 seconds, followed by at most 30 seconds waiting for arrival. Direct reads
   have byte limits and timeouts too. Status, conversation listing, and clearing
   notifications each have a 45-second overall deadline.
-- Each status refresh includes at most eight devices, reads at most 100
-  notifications per device, and displays at most 25. Conversations and threads
+- Each status refresh includes at most eight devices, reads the app name and
+  package of at most 100 notifications per device, and reads the contents of at
+  most 25 it will display. Content of filtered or muted notifications is never
+  read. Conversations and threads
   contain at most 200 entries, with at most ten attachment thumbnails per entry.
   Thumbnails are capped at 256 KiB of encoded data. Titles and previews are
   capped at 1 KiB, message bodies at 8 KiB, and names at 256 characters. Contact

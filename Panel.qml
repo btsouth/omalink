@@ -6,6 +6,7 @@ import Quickshell.Io
 import qs.Commons
 import qs.Ui
 import "Model.js" as Model
+import "NotificationPolicy.js" as NotificationPolicy
 
 Panel {
   id: root
@@ -21,11 +22,22 @@ Panel {
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property color iconColor: phone.connected ? foreground : dim
-  readonly property var notifications: phone.canUseCapability(activePhoneId, "notifications") && phone.selectedDevice && Array.isArray(phone.selectedDevice.notifications)
-    ? Model.visibleNotifications(phone.selectedDevice.notifications, phone.notifySources) : []
+  readonly property bool notificationsReady: phone.canUseCapability(activePhoneId, "notifications") && !!phone.selectedDevice
+  readonly property var activePhoneRules: phone.notifyRulesFor(activePhoneId)
+  readonly property var notifications: notificationsReady && Array.isArray(phone.selectedDevice.notifications)
+    ? NotificationPolicy.visibleNotifications(phone.selectedDevice.notifications, phone.notifySources, activePhoneRules) : []
+  readonly property var notificationSources: notificationsReady
+    ? NotificationPolicy.normalizeSources(phone.selectedDevice.notificationSources) : null
+  readonly property var notificationAppRows: notificationsReady ? NotificationPolicy.appRows(notificationSources, activePhoneRules) : []
+  readonly property var notificationSummary: NotificationPolicy.summaryLines(notificationSources, notifications.length,
+    !panelContentHidden && notifications.length > 0)
+  readonly property bool notificationSectionVisible: notifications.length > 0 || notificationAppRows.length > 0
+    || (notificationSources !== null && notificationSources.examined > 0)
+  property bool showNotificationApps: false
   readonly property bool panelContentHidden: settings.panelContent !== undefined
     && String(settings.panelContent) !== "Show"
   onPanelContentHiddenChanged: {
+    syncNotificationApps()
     if (panelContentHidden) {
       notifReplyId = ""
       notifReplyDeviceId = ""
@@ -75,19 +87,72 @@ Panel {
     if (opened && messagesReady) { refreshSeen(); refreshUnread() }
   }
 
-  function persistSelection(deviceId, deviceName) {
-    if (!Model.validDeviceId(deviceId)) return
+  // An undefined change removes that key from the saved entry.
+  function persistEntry(changes, unsavedText) {
     var entry = {}
     for (var key in root.settings) if (key !== "id") entry[key] = root.settings[key]
-    entry.selectedDeviceId = deviceId
-    entry.selectedDeviceName = String(deviceName).slice(0, 256)
+    for (var change in changes) {
+      if (changes[change] === undefined) delete entry[change]
+      else entry[change] = changes[change]
+    }
     root.settings = entry
     if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
       // The host returns false for a successful no-op too, not just a missing
       // entry. It does not expose a synchronous disk-write acknowledgement.
       root.bar.shell.updateEntryInline(root.moduleName, entry)
     else
-      phone.actionStatus = qsTr("Phone selected for this session; could not save the preference.")
+      phone.actionStatus = unsavedText
+  }
+
+  function persistSelection(deviceId, deviceName) {
+    if (!Model.validDeviceId(deviceId)) return
+    persistEntry({selectedDeviceId: deviceId, selectedDeviceName: String(deviceName).slice(0, 256)},
+      qsTr("Phone selected for this session; could not save the preference."))
+  }
+
+  function persistNotificationRules(rules) {
+    persistEntry({notifyAppRules: Object.keys(rules).length > 0 ? rules : undefined},
+      qsTr("App rule applied for this session; could not save the preference."))
+  }
+
+  // Rules belong to the selected phone and only change what OmaLink shows.
+  function setNotificationRule(key, state, label) {
+    if (!Model.validDeviceId(activePhoneId)) return
+    var rules = phone.notifyRulesWith(activePhoneId, key, state, label)
+    if (rules === null) {
+      phone.actionStatus = qsTr("Could not save this app rule. OmaLink keeps up to 100 app rules on up to 16 phones.")
+      return
+    }
+    persistNotificationRules(rules)
+  }
+
+  // Rows are updated in place by key, so a rule change or a new notification
+  // does not rebuild them and take keyboard focus away. App names are
+  // notification metadata: the model is emptied while content is hidden.
+  function syncNotificationApps() {
+    var rows = panelContentHidden || !showNotificationApps ? [] : notificationAppRows
+    for (var i = 0; i < rows.length; i++) {
+      var row = {key: rows[i].key, label: rows[i].label, detail: NotificationPolicy.appRowDetail(rows[i]),
+        status: NotificationPolicy.appRowStatus(rows[i]), rule: rows[i].state}
+      var found = -1
+      for (var j = i; j < notificationAppModel.count && found === -1; j++)
+        if (notificationAppModel.get(j).key === row.key) found = j
+      if (found === -1) notificationAppModel.insert(i, row)
+      else {
+        if (found !== i) notificationAppModel.move(found, i, 1)
+        notificationAppModel.set(i, row)
+      }
+    }
+    if (notificationAppModel.count > rows.length)
+      notificationAppModel.remove(rows.length, notificationAppModel.count - rows.length)
+  }
+  onNotificationAppRowsChanged: syncNotificationApps()
+  onShowNotificationAppsChanged: syncNotificationApps()
+
+  ListModel { id: notificationAppModel }
+
+  function resetNotificationRules() {
+    if (Model.validDeviceId(activePhoneId)) persistNotificationRules(phone.notifyRulesWithout(activePhoneId))
   }
 
   function selectDevice(deviceId) {
@@ -948,7 +1013,7 @@ Panel {
         }
   
         RowLayout {
-          visible: root.notifications.length > 0
+          visible: root.notificationSectionVisible
           Layout.fillWidth: true
   
           Text {
@@ -963,13 +1028,28 @@ Panel {
   
           Button {
             text: "Clear all"
-            visible: !root.panelContentHidden
+            visible: !root.panelContentHidden && root.notifications.length > 0
             foreground: root.foreground
             fontFamily: root.fontFamily
             onClicked: phone.dismissAllNotifications(root.activePhoneId)
           }
         }
-  
+
+        Repeater {
+          model: root.notificationSectionVisible ? root.notificationSummary : []
+
+          Text {
+            required property string modelData
+            Layout.fillWidth: true
+            text: modelData
+            textFormat: Text.PlainText
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.Wrap
+          }
+        }
+
         ListView {
           objectName: "notificationContentList"
           visible: !root.panelContentHidden && root.notifications.length > 0
@@ -1146,6 +1226,101 @@ Panel {
           }
         }
       }
+
+        Button {
+          objectName: "notificationAppsButton"
+          visible: !root.panelContentHidden && root.notificationSectionVisible
+          text: root.showNotificationApps ? qsTr("Hide notification apps") : qsTr("Notification apps")
+          focusable: true
+          Accessible.role: Accessible.Button
+          Accessible.name: text
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          onClicked: root.showNotificationApps = !root.showNotificationApps
+        }
+
+        // App names are notification metadata, so the list follows Panel
+        // message content. Its delegate model is emptied while hidden.
+        ColumnLayout {
+          objectName: "notificationAppList"
+          visible: !root.panelContentHidden && root.showNotificationApps && root.notificationSectionVisible
+          Layout.fillWidth: true
+          spacing: Style.space(8)
+
+          Text {
+            Layout.fillWidth: true
+            text: qsTr("Apps in the phone's current notifications, from up to 100 checked. This is not a list of installed apps. Mute hides an app in OmaLink only: the panel, popups and Clear all. The phone and KDE Connect are unchanged.")
+            textFormat: Text.PlainText
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.Wrap
+          }
+
+          Repeater {
+            id: notificationAppRepeater
+            objectName: "notificationAppRepeater"
+            model: notificationAppModel
+
+            ColumnLayout {
+              id: appRow
+              required property string key
+              required property string label
+              required property string detail
+              required property string status
+              required property string rule
+              readonly property Item ruleGroup: ruleButtons
+              Layout.fillWidth: true
+              spacing: Style.space(2)
+
+              Text {
+                Layout.fillWidth: true
+                text: appRow.label
+                textFormat: Text.PlainText
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                font.bold: true
+                elide: Text.ElideRight
+              }
+
+              Text {
+                Layout.fillWidth: true
+                text: appRow.detail + " · " + appRow.status
+                textFormat: Text.PlainText
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.Wrap
+              }
+
+              ButtonGroup {
+                id: ruleButtons
+                options: [{value: "default", label: qsTr("Default"), tooltip: qsTr("Use the Notification sources setting")},
+                  {value: "allow", label: qsTr("Allow"), tooltip: qsTr("Always list this app")},
+                  {value: "mute", label: qsTr("Mute"), tooltip: qsTr("Hide this app in OmaLink")}]
+                value: appRow.rule
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                fontSize: Style.font.caption
+                Accessible.role: Accessible.Grouping
+                Accessible.name: qsTr("Notification rule for %1").arg(appRow.label)
+                onChanged: function(value) { root.setNotificationRule(appRow.key, value, appRow.label) }
+              }
+            }
+          }
+
+          Button {
+            visible: Object.keys(root.activePhoneRules).length > 0
+            text: qsTr("Reset app rules for this phone")
+            focusable: true
+            Accessible.role: Accessible.Button
+            Accessible.name: text
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onClicked: root.resetNotificationRules()
+          }
+        }
 
       }
     }

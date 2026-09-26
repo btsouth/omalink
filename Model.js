@@ -217,22 +217,6 @@ function mediaTime(milliseconds) {
   return minutes + ":" + (seconds < 10 ? "0" : "") + seconds
 }
 
-function visibleNotifications(notifications, sources) {
-  if (!Array.isArray(notifications)) return []
-  var terms = null
-  if (typeof sources === "string") {
-    terms = sources.split(",").map(function(term) { return term.trim().toLowerCase() }).filter(function(term) { return term.length > 0 })
-  }
-  return notifications.filter(function(notification) {
-    if (!notification || typeof notification !== "object") return false
-    var packageName = String(notification.packageName || "").toLowerCase()
-    var app = String((notification && notification.appName) || "").toLowerCase()
-    // No configured list keeps the historical spotify filter for older configs.
-    if (!terms) return !(app === "spotify" && !notification.isConversation)
-    return terms.length === 0 || terms.some(function(term) { return app.indexOf(term) !== -1 || packageName.indexOf(term) !== -1 })
-  })
-}
-
 function filterConversations(conversations, query) {
   if (!Array.isArray(conversations)) return []
   var needle = String(query || "").trim().toLowerCase()
@@ -590,7 +574,6 @@ if (typeof module !== "undefined") {
     mediaTitle: mediaTitle,
     mediaSubtitle: mediaSubtitle,
     mediaTime: mediaTime,
-    visibleNotifications: visibleNotifications,
     filterConversations: filterConversations,
     parseContacts: parseContacts,
     filterContacts: filterContacts,
