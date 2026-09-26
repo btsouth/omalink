@@ -44,6 +44,7 @@ function connectivityText(device) {
 
 function signalStrength(device) {
   if (!device || !device.connectivity) return -1
+  if (device.connectivity.strength === null || device.connectivity.strength === undefined) return -1
   var strength = Number(device.connectivity.strength)
   return isFinite(strength) && strength >= 0 ? Math.floor(strength) : -1
 }
@@ -80,10 +81,12 @@ function visibleNotifications(notifications, sources) {
     terms = sources.split(",").map(function(term) { return term.trim().toLowerCase() }).filter(function(term) { return term.length > 0 })
   }
   return notifications.filter(function(notification) {
+    if (!notification || typeof notification !== "object") return false
+    var packageName = String(notification.packageName || "").toLowerCase()
     var app = String((notification && notification.appName) || "").toLowerCase()
     // No configured list keeps the historical spotify filter for older configs.
     if (!terms) return !(app === "spotify" && !notification.isConversation)
-    return terms.length === 0 || terms.some(function(term) { return app.indexOf(term) !== -1 })
+    return terms.length === 0 || terms.some(function(term) { return app.indexOf(term) !== -1 || packageName.indexOf(term) !== -1 })
   })
 }
 
@@ -168,7 +171,8 @@ function upsertConversationAfterSms(conversations, number, name, body, timestamp
   var remaining = []
   for (var i = 0; i < current.length; i++) {
     var conversation = current[i]
-    if (!updated && conversationMatchesNumber(conversation, number)) {
+    if (!updated && conversation.addresses && conversation.addresses.length === 1
+        && conversationMatchesNumber(conversation, number)) {
       updated = {}
       for (var key in conversation) updated[key] = conversation[key]
     } else {
@@ -199,7 +203,8 @@ function mergePendingConversation(conversations, pending) {
 
   var matchIndex = -1
   for (var i = 0; i < current.length; i++) {
-    if (conversationMatchesNumber(current[i], pending.addresses[0])) {
+    if (current[i].addresses && current[i].addresses.length === 1
+        && conversationMatchesNumber(current[i], pending.addresses[0])) {
       matchIndex = i
       break
     }

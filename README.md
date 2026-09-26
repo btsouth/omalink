@@ -38,6 +38,11 @@ account or cloud relay.
 - Omarchy 4.0 or newer
 - An Android phone with [KDE Connect](https://kdeconnect.kde.org/) installed
 - `kdeconnect` and `jq` on the Omarchy computer
+- The standard Omarchy tools from `bash`, `coreutils`, `util-linux`, `systemd`,
+  `dbus`, `libnotify`, `xdg-utils`, `findutils`, `gawk`, `grep`, and `sed`
+
+Qt and Quickshell come with Omarchy. Python and Node.js are development test
+requirements only; the plugin does not use them at runtime.
 
 ## Install
 
@@ -50,7 +55,7 @@ omarchy plugin add https://github.com/btsouth/omalink.git --enable
 If KDE Connect is not installed yet:
 
 ```sh
-omarchy pkg add kdeconnect
+omarchy pkg add kdeconnect jq
 ```
 
 Open OmaLink from the bar, choose **Open pairing**, and approve the computer in
@@ -58,14 +63,31 @@ KDE Connect on your phone. Grant the Android permissions needed for messaging,
 contacts, notifications, clipboard access, and device status.
 
 Both devices must be able to reach one another, normally on the same local
-network.
+network. OmaLink never installs packages itself.
+
+## Remove
+
+```sh
+omarchy plugin remove omalink.phone
+```
+
+This leaves KDE Connect, its pairings, and its cached files untouched. Optional
+OmaLink unread state lives under `~/.local/state/omalink`; remove that directory
+if you no longer want it.
+
+Versions through 0.2.2 could add `[Event/notification]` with `Action=` to
+`~/.config/kdeconnect.notifyrc`. Version 0.2.3 does not change this file. If you
+want KDE Connect's popups back after removing OmaLink, review that section and
+remove the empty `Action=` override that OmaLink added. Preserve any settings
+you configured yourself.
 
 ## Messaging notes
 
 OmaLink uses KDE Connect's Android messaging interface. It can read SMS/MMS
 conversation history, send SMS messages, and show that a message contains an
-attachment. Sending attachments and RCS are not currently exposed by KDE
-Connect.
+attachment. OmaLink does not yet send attachments or expose full RCS
+conversations. KDE Connect's desktop messaging API includes attachment-send
+support, but OmaLink has not implemented or validated that workflow.
 
 Message history is requested from the phone when needed. OmaLink does not add
 its own cloud service or persistent message database.
@@ -88,12 +110,14 @@ control**.
 
 ## Notification popups
 
-KDE Connect's own desktop popups for phone notifications cannot open anything
-when clicked, so OmaLink silences that single popup event (by writing an
-`[Event/notification]` override to `~/.config/kdeconnect.notifyrc`) and shows
-its own popups instead. Clicking an OmaLink popup opens the OmaLink panel.
-Popups for messages never include the message contents; the panel and the
-Messages window show them.
+OmaLink's popups show the app name and an invitation to open the panel. They
+never include notification titles or bodies, including authenticator codes.
+Clicking a popup opens the OmaLink panel. At most four popup helpers run at
+once; notifications skipped during a burst remain available in the panel.
+
+KDE Connect may also show its own popups. To avoid duplicates, turn those off
+in KDE Connect's notification settings, or turn OmaLink's **Notification
+popups** setting Off. OmaLink does not edit KDE Connect configuration.
 
 By default OmaLink only reads notifications from Android messaging apps,
 WhatsApp, Microsoft Authenticator, and Google Authenticator. Change
@@ -103,68 +127,56 @@ package), or clear the field to allow every notification. **Notification
 popups** can be set to Off to keep matching notifications listed in the panel
 without desktop popups.
 
-## Security
+## Security and local data
 
-Everything OmaLink reads comes from the paired phone and is treated as
-untrusted: any app on the phone can choose a notification title, an album art
-URL, or an attachment.
+Phone notifications, media metadata, contact records, and attachments are
+untrusted input. OmaLink applies these checks before displaying or opening them:
 
-- A file with more than one hard link is refused, so the same inode cannot be
-  reached from outside KDE Connect's directories even though its path resolves
-  inside them.
-- Images from the phone (album art, notification icons, attachment previews)
-  are loaded only when they are local files under KDE Connect's own cache and
-  icon directories, stay under a size limit (album art 8 MiB, notification
-  icons 1 MiB), and are raster images (PNG, JPEG, GIF, BMP, WebP). Attachment
-  thumbnails must decode to a raster image, and a thread carries at most ten
-  attachments with thumbnails up to 256 KiB each. The full size viewer loads an
-  attachment only when its contents really are a raster image, whatever the
-  phone called it. Remote URLs and other URI schemes, paths outside those
-  directories, symlinks that point elsewhere, oversized files, and SVG or other
-  markup are all dropped, and the shell decodes them at a bounded size so a
-  malicious image cannot exhaust memory.
-- Text from the phone is rendered as plain text in the panel and escaped in
-  desktop popups, so notification contents cannot inject markup or make the
-  popup daemon fetch something remote.
-- Attachments can be opened or saved only from KDE Connect's cache directory
-  (`~/.cache/kdeconnect.daemon`, where the daemon writes them) or its per-user
-  temporary icon directory. Both actions go through OmaLink's own helper, which refuses files
-  the phone sent that would run (programs, scripts, and desktop entries), files
-  whose contents cannot be read, and pages or shortcuts that would make your
-  browser fetch something the phone chose. That decision follows the mime type
-  the desktop itself would use, so case, leading whitespace and a byte order
-  mark cannot hide a page.
-  Saving a page is still allowed; anything else is handed to your default
-  application or saved to Downloads.
-- The phone decides how much data there is, so everything is bounded: each
-  refresh reads at most 100 notifications and shows at most 25, the conversation
-  list and message threads carry the newest 200 entries, notification titles and
-  conversation previews are capped at 1 KiB, notification and message text at
-  8 KiB, app names at 256 characters, ids at 128, media metadata at 256, contacts
-  at 2000 with 256-character names, and message and attachment signal captures
-  at 16 MiB. A watchdog enforces that capture ceiling while the request is still
-  in flight, and the attachment request itself has a 30-second timeout, so a
-  pending phone call cannot keep the capture growing. Direct D-Bus responses
-  are capped and timed the same way before their contents are truncated.
-- OmaLink never builds a shell command out of phone data. Values passed to
-  `kdeconnect-cli`, `busctl`, and the plugin's own helper are passed as single
-  arguments and validated first, every `busctl` call separates its options with
-  `--`, and ids and attachment names may not start with a dash, so a
-  phone-supplied value can never be read as an option.
+- Image paths must resolve to readable regular files inside KDE Connect's cache
+  or per-user icon directory. Files with multiple hard links, remote URLs,
+  control characters, markup, and other URI schemes are refused. Art and the
+  image viewer accept at most 8 MiB; notification icons accept at most 1 MiB.
+  Raster signatures and bounded QML decode sizes are required.
+- Notification and message text is rendered as plain text. Popups contain no
+  notification content, and the displayed app name is escaped.
+- D-Bus captures have an exact 16 MiB disk ceiling. The monitor and pending
+  request are terminated and reaped on overflow, cancellation, or completion.
+  Conversation requests time out after 12 seconds; attachment requests after
+  30 seconds, followed by at most 30 seconds waiting for arrival. Direct reads
+  have byte limits and timeouts too. Status, conversation listing, and clearing
+  notifications each have a 45-second overall deadline.
+- Each status refresh includes at most eight devices, reads at most 100
+  notifications per device, and displays at most 25. Conversations and threads
+  contain at most 200 entries, with at most ten attachment thumbnails per entry.
+  Thumbnails are capped at 256 KiB of encoded data. Titles and previews are
+  capped at 1 KiB, message bodies at 8 KiB, and names at 256 characters. Contact
+  reads are bounded by file count and bytes and return at most 2000 numbers.
+- Commands use argument arrays and validated identifiers. Global options are
+  parsed before the command, so message text that resembles an option remains
+  literal text. D-Bus options end at `--`.
+- Opening or saving an attachment requires a validated local cache file no
+  larger than 2 GiB. Executable files, scripts, and desktop entries are refused.
+  Opening additionally refuses web pages and shortcuts. An unavailable MIME
+  classifier fails closed. Save destinations are claimed without overwriting
+  existing files or following existing symlinks.
 
-OmaLink writes: one `[Event/notification]` line in
-`~/.config/kdeconnect.notifyrc` (so its own popups replace KDE Connect's),
-thread ids and timestamps in `~/.local/state/omalink/seen.json` for the unread
-badge (never message contents), lock and pid files in `$XDG_RUNTIME_DIR` for the
-single notification watcher, and the files you explicitly save to your Downloads
-folder.
+OmaLink writes device-specific thread ids and timestamps, never message bodies,
+to `~/.local/state/omalink/seen-DEVICE.json`. It also uses private runtime locks,
+bounded temporary D-Bus captures, and files you explicitly save to Downloads.
+Legacy `seen.json` state is left untouched; unread badges may reappear once
+when upgrading to device-specific state.
 
-What the checks do not cover, on purpose: the phone still chooses the contents
-of the files it sends, so a validated image is untrusted data being decoded (the
-size caps and decode bounds limit what that costs, and Qt's own image reader
-also refuses any single allocation over 256 MB), KDE Connect can rewrite a file
-in its own cache between the check and the load, and art in a format other than
-the five above shows the placeholder instead.
+The Messages window keeps at most five threads in memory. Closing it clears
+conversation data, contacts, attachment paths, drafts, and pending display data,
+and cancels outstanding reads. Late results cannot reopen an attachment or
+repopulate the closed window. A send already submitted to KDE Connect may
+still finish after the window closes.
+
+KDE Connect maintains its own caches independently. OmaLink is an unsandboxed
+plugin, and opening a permitted attachment hands untrusted content to your
+chosen application. These checks do not establish that file contents are safe,
+protect against image-decoder vulnerabilities, or prevent KDE Connect or another
+process under your account from changing a cached file after validation.
 
 ## Settings
 
@@ -175,13 +187,16 @@ dropped when the Messages window closes.
 
 ## Development
 
-Run the checks:
+Run the checks in an isolated desktop with [omabox](https://github.com/btsouth/omabox):
 
 ```sh
-omarchy plugin validate .
 node tests/model.test.js
-bash tests/cli.test.sh
 bash tests/qml.test.sh
+shellcheck -S warning bin/omalink
+omabox run -- omarchy plugin validate .
+omabox run -- bash tests/cli.test.sh
+omabox run -- python tests/audit.test.py
+omabox run -- bash tests/runtime.test.sh
 ```
 
 The test suite uses mock phone data and does not send messages.
@@ -191,6 +206,10 @@ The test suite uses mock phone data and does not send messages.
 - Guided setup and permission diagnostics
 - File sending
 - Event-driven message and media updates
+
+See the [product review and proposed roadmap](docs/product-roadmap.md) for
+priorities, iPhone integration options, and the validation required before
+claiming support. These are proposed features, not current capabilities.
 
 ## License
 

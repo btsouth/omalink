@@ -11,7 +11,7 @@ Panel {
   id: root
   moduleName: "omalink.phone"
   // Per-screen target: with one bar per monitor, identical targets collide and
-  // only one panel stays reachable — popup clicks then open the wrong monitor.
+  // only one panel stays reachable, so popup clicks open the wrong monitor.
   readonly property var panelWindow: QsWindow.window
   readonly property string screenName: panelWindow && panelWindow.screen && panelWindow.screen.name
     ? String(panelWindow.screen.name) : ""
@@ -29,6 +29,12 @@ Panel {
   property string notifReplyTitle: ""
   property var unreadRaw: []
   property var seenMap: ({})
+  readonly property string activePhoneId: phone.devices.length > 0 ? String(phone.devices[0].id) : ""
+  onActivePhoneIdChanged: {
+    unreadRaw = []
+    seenMap = ({})
+    if (opened && activePhoneId !== "") { refreshSeen(); refreshUnread() }
+  }
   readonly property var unreadConversations: Model.filterUnseenUnread(unreadRaw, seenMap)
 
   implicitWidth: button.implicitWidth
@@ -44,18 +50,20 @@ Panel {
 
   function refreshUnread() {
     if (phone.devices.length === 0 || unreadProcess.running) return
-    unreadProcess.command = [phone.helperPath, "conversations", phone.devices[0].id]
+    unreadProcess.deviceId = activePhoneId
+    unreadProcess.command = [phone.helperPath, "conversations", activePhoneId]
     unreadProcess.running = true
   }
 
   function refreshSeen() {
-    if (seenProcess.running) return
-    seenProcess.command = [phone.helperPath, "seen"]
+    if (activePhoneId === "" || seenProcess.running) return
+    seenProcess.deviceId = activePhoneId
+    seenProcess.command = [phone.helperPath, "seen", activePhoneId]
     seenProcess.running = true
   }
 
   function markSeenEntries(conversations) {
-    var args = [phone.helperPath, "mark-seen"]
+    var args = [phone.helperPath, "mark-seen", activePhoneId]
     var updated = {}
     for (var key in seenMap) updated[key] = seenMap[key]
     var found = false
@@ -74,6 +82,7 @@ Panel {
   }
 
   function openMessages(payload) {
+    if (activePhoneId === "") return
     payload.deviceId = phone.devices[0].id
     root.close()
     bar.shell.summon("omalink.phone", JSON.stringify(payload))
@@ -81,17 +90,21 @@ Panel {
 
   Process {
     id: unreadProcess
+    property string deviceId: ""
+    onExited: if (deviceId !== root.activePhoneId && root.opened) Qt.callLater(root.refreshUnread)
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: root.unreadRaw = Model.unreadConversations(Model.parseConversations(text))
+      onStreamFinished: if (unreadProcess.deviceId === root.activePhoneId) root.unreadRaw = Model.unreadConversations(Model.parseConversations(text))
     }
   }
 
   Process {
     id: seenProcess
+    property string deviceId: ""
+    onExited: if (deviceId !== root.activePhoneId && root.opened) Qt.callLater(root.refreshSeen)
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: root.seenMap = Model.parseSeen(text)
+      onStreamFinished: if (seenProcess.deviceId === root.activePhoneId) root.seenMap = Model.parseSeen(text)
     }
   }
 
@@ -176,9 +189,9 @@ Panel {
         }
   
         Text {
-          visible: !phone.installed
+          visible: !phone.installed && !phone.statusFailed
           Layout.fillWidth: true
-          text: "KDE Connect is required. Installation will be part of the guided OmaLink setup."
+          text: "Install kdeconnect and jq, then open pairing to connect your phone."
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall
@@ -229,6 +242,8 @@ Panel {
     
                   Text {
                     text: modelData.name
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
                     textFormat: Text.PlainText
                     color: root.foreground
                     font.family: root.fontFamily
@@ -352,7 +367,7 @@ Panel {
   
                   Text {
                     Layout.fillWidth: true
-                    text: "NOW PLAYING · " + media.player
+                    text: "NOW PLAYING · " + mediaSection.media.player
                     textFormat: Text.PlainText
                     color: root.dim
                     font.family: root.fontFamily
@@ -364,7 +379,7 @@ Panel {
   
                   Text {
                     Layout.fillWidth: true
-                    text: Model.mediaTitle(media)
+                    text: Model.mediaTitle(mediaSection.media)
                     textFormat: Text.PlainText
                     color: root.foreground
                     font.family: root.fontFamily
@@ -376,7 +391,7 @@ Panel {
                   Text {
                     visible: text !== ""
                     Layout.fillWidth: true
-                    text: Model.mediaSubtitle(media)
+                    text: Model.mediaSubtitle(mediaSection.media)
                     textFormat: Text.PlainText
                     color: root.dim
                     font.family: root.fontFamily
@@ -394,8 +409,8 @@ Panel {
                 }
   
                 PanelActionButton {
-                  iconText: media.isPlaying ? "󰏤" : "󰐊"
-                  tooltipText: media.isPlaying ? "Pause" : "Play"
+                  iconText: mediaSection.media.isPlaying ? "󰏤" : "󰐊"
+                  tooltipText: mediaSection.media.isPlaying ? "Pause" : "Play"
                   foreground: root.foreground
                   fontFamily: root.fontFamily
                   onClicked: phone.mediaAction(modelData.id, "PlayPause")
@@ -411,12 +426,12 @@ Panel {
               }
   
               RowLayout {
-                visible: media.canSeek && media.length > 0
+                visible: mediaSection.media.canSeek && mediaSection.media.length > 0
                 Layout.fillWidth: true
                 spacing: Style.space(8)
   
                 Text {
-                  text: Model.mediaTime(mediaProgress.dragging ? mediaProgress.liveValue : media.position)
+                  text: Model.mediaTime(mediaProgress.dragging ? mediaProgress.liveValue : mediaSection.media.position)
                   textFormat: Text.PlainText
                   color: root.dim
                   font.family: root.fontFamily
@@ -428,15 +443,15 @@ Panel {
                   Layout.fillWidth: true
                   bar: root.bar
                   minimum: 0
-                  maximum: Math.max(1000, media.length)
+                  maximum: Math.max(1000, mediaSection.media.length)
                   step: 1000
                   integer: true
-                  value: media.position
+                  value: mediaSection.media.position
                   onReleased: function(v) { phone.mediaSeek(modelData.id, v) }
                 }
   
                 Text {
-                  text: Model.mediaTime(media.length)
+                  text: Model.mediaTime(mediaSection.media.length)
                   textFormat: Text.PlainText
                   color: root.dim
                   font.family: root.fontFamily
@@ -463,12 +478,12 @@ Panel {
                   maximum: 100
                   step: 5
                   integer: true
-                  value: media.volume
+                  value: mediaSection.media.volume
                   onReleased: function(v) { phone.mediaVolume(modelData.id, v) }
                 }
   
                 Text {
-                  text: Math.round(mediaVolume.dragging ? mediaVolume.liveValue : media.volume) + "%"
+                  text: Math.round(mediaVolume.dragging ? mediaVolume.liveValue : mediaSection.media.volume) + "%"
                   textFormat: Text.PlainText
                   color: root.dim
                   font.family: root.fontFamily

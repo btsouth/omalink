@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "omalink.phone",
   "name": "OmaLink",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "author": "OmaLink contributors",
   "license": "MIT",
   "description": "Native Android phone integration for Omarchy, powered by KDE Connect.",
@@ -38,7 +38,7 @@
         "type": "string",
         "label": "Notification sources",
         "defaultValue": "Messages, Messaging, Authenticator, WhatsApp, MMS",
-        "description": "Comma-separated app names or Android package names. A notification pops up when one of these appears in its app name or package. Clear the list to allow every notification."
+        "description": "Comma-separated app names or Android package names. A notification is listed when one of these appears in its app name or package. Clear the list to allow every notification."
       },
       {
         "key": "notifyPopups",

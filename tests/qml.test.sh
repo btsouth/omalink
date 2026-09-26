@@ -63,7 +63,7 @@ while IFS= read -r match; do
   line="${remainder%%:*}"
   owner="$(owner_of "$project_dir/$file" "$line")"
   case $owner in
-    Text{ | TextArea{ | TextEdit{ ) ;;
+    'Text{' | 'TextArea{' | 'TextEdit{' ) ;;
     *) fail "textFormat on an element that has no such property: $file:$line (${owner:-unknown owner})" ;;
   esac
 done < <(cd "$project_dir" && grep -rn 'textFormat:' --include='*.qml' . | sed 's|^\./||')
@@ -78,12 +78,12 @@ for file in "$project_dir"/*.qml; do
     owner="$(printf '%s' "${text%%|*}" | tr -d '[:space:]')"
 
     # A Text showing phone data has to say so.
-    if [[ $owner == Text{ ]] && printf '%s' "$text" | grep -qE 'text[[:space:]]*:.*(Model\.|modelData\.|media\.|root\.viewerStatus|root\.notifReplyTitle|root\.shareDeviceName|phone\.statusText)'; then
+    if [[ $owner == 'Text{' ]] && printf '%s' "$text" | grep -qE 'text[[:space:]]*:.*(Model\.|modelData\.|media\.|root\.viewerStatus|root\.notifReplyTitle|root\.shareDeviceName|phone\.statusText)'; then
       printf '%s' "$text" | grep -q 'textFormat: Text.PlainText' ||
         fail "Text showing phone data without textFormat: $name:$line"
     fi
 
-    if [[ $owner == Image{ ]] && printf '%s' "$text" | grep -qE 'source[[:space:]]*:'; then
+    if [[ $owner == 'Image{' ]] && printf '%s' "$text" | grep -qE 'source[[:space:]]*:'; then
       source_line="$(printf '%s' "$text" | tr '|' '\n' | grep -E '^[[:space:]]*source[[:space:]]*:' | head -n 1)"
 
       # Raw phone data must not be read here unless the gate produced it.

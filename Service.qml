@@ -9,6 +9,7 @@ Item {
   property var settings: ({})
   property bool panelOpen: false
   property bool installed: false
+  property bool statusFailed: false
   property bool refreshing: false
   property var devices: []
   property string statusText: "Checking…"
@@ -24,10 +25,18 @@ Item {
   readonly property string helperPath: pluginDir + "/bin/omalink"
 
   function withNotify(command) {
-    var full = command.slice()
-    if (notifySources !== undefined) full = full.concat(["--notify-apps", notifySources])
-    return full.concat(["--popups", notifyPopups])
+    return [helperPath, "--popups", notifyPopups].concat(
+      notifySources !== undefined ? ["--notify-apps", notifySources] : [], command.slice(1))
   }
+  onNotifySourcesChanged: restartWatcher()
+  onNotifyPopupsChanged: restartWatcher()
+
+  function restartWatcher() {
+    watchProcess.running = false
+    watchRestart.restart()
+    refresh()
+  }
+
   readonly property bool connected: devices.length > 0
 
   function setting(name, fallback) {
@@ -50,6 +59,8 @@ Item {
 
   function applyStatus(raw) {
     var status = Model.parseStatus(raw)
+    statusFailed = String(raw || "").trim() === "" || status.ok !== true
+    if (statusFailed) { statusText = "Could not refresh phone status"; return }
     installed = status.installed === true
     devices = status.devices || []
     statusText = String(status.statusText || Model.deviceSummary(devices))
@@ -165,7 +176,13 @@ Item {
       waitForEnd: true
       onStreamFinished: root.applyStatus(text)
     }
-    onExited: root.refreshing = false
+    onExited: function(exitCode) {
+      root.refreshing = false
+      if (exitCode !== 0) {
+        root.statusFailed = true
+        root.statusText = "Could not refresh phone status"
+      }
+    }
   }
 
   Process {

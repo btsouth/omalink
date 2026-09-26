@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.3 - Unreleased
+
+- Enforce a hard 16 MiB capture limit while requests are pending. Kill and reap
+  both producers on overflow or cancellation, and filter signals by device.
+- Bound popup workers, contact reads, device metadata, notification clearing,
+  attachment image sizes, and the Messages window's thread cache.
+- Stop changing KDE Connect notification settings. Popups now hide all titles
+  and bodies, including authenticator codes. Document removal and old overrides.
+- Fix blank media controls and the doubled D-Bus path used by seek.
+- Preserve package-name notification filters and literal option-like message text.
+- Prevent late results and old phone data from repopulating closed or reopened
+  windows. Store unread timestamps separately for each phone.
+- Pass large contact and notification data through streams instead of argv.
+- Refuse executable attachments and unknown MIME classification; claim save
+  destinations without overwriting an existing file or symlink.
+- Add adversarial process tests and real Quickshell lifecycle tests with fake
+  phone data.
+
 ## 0.2.2 - 2026-09-19
 
 Security, from the follow-up review in omarchy-plugin-marketplace#7127:
