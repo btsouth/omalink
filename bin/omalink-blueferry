@@ -1,0 +1,336 @@
+#!/usr/bin/python3
+"""Read-only, owner-bound BlueFerry API 2 adapter. Requests arrive on stdin."""
+import datetime
+import json
+import logging
+import re
+import resource
+import signal
+import sys
+import time
+
+SERVICE = 'io.weirdware.BlueFerry'
+PATH = '/io/weirdware/BlueFerry'
+INTERFACE = SERVICE + '.Messages1'
+BUS = 'org.freedesktop.DBus'
+BUS_PATH = '/org/freedesktop/DBus'
+ENDPOINT = {'provider': 'blueferry', 'instanceId': 'local', 'deviceId': 'local-history', 'accountId': None}
+INPUT_LIMIT = 65536
+WIRE_LIMIT = 8 * 1024 * 1024
+OUTPUT_LIMIT = 2 * 1024 * 1024
+MEMORY_LIMIT = 256 * 1024 * 1024
+
+
+class Rejected(Exception):
+    def __init__(self, code):
+        self.code = code
+
+
+def fail(code):
+    raise Rejected(code)
+
+
+def unique_pairs(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            fail('invalid_response')
+        value[key] = item
+    return value
+
+
+def opaque(value, limit):
+    if not isinstance(value, str) or not 0 < len(value) <= limit or re.search(r'[\x00-\x1f\x7f]', value):
+        return False
+    try:
+        value.encode('utf-8')
+        if len(value.encode('utf-16-le')) // 2 > limit:
+            return False
+    except UnicodeError:
+        return False
+    return True
+
+
+def valid_owner(value):
+    return isinstance(value, str) and len(value) <= 255 and re.fullmatch(r':[0-9]+\.[0-9]+', value)
+
+
+def request_from(stream):
+    try:
+        raw = stream.read(INPUT_LIMIT + 1)
+        if len(raw) > INPUT_LIMIT:
+            fail('invalid_request')
+        request = json.loads(raw.decode('utf-8'), object_pairs_hook=unique_pairs)
+        if not isinstance(request, dict) or type(request.get('version')) is not int or request['version'] != 1:
+            fail('invalid_request')
+        operation = request.get('operation')
+        if operation not in ('status', 'threads', 'messages', 'contacts'):
+            fail('invalid_request')
+        allowed = {'version', 'operation'}
+        if operation != 'status':
+            allowed |= {'endpoint', 'expectedOwner'}
+            if request.get('endpoint') != ENDPOINT or not valid_owner(request.get('expectedOwner')):
+                fail('invalid_request')
+        if operation == 'messages':
+            allowed.add('threadId')
+            if not opaque(request.get('threadId'), 1024):
+                fail('invalid_request')
+        if operation == 'contacts':
+            allowed.add('query')
+            query = request.get('query', '')
+            if not isinstance(query, str) or len(query) > 256 or ('\0' in query):
+                fail('invalid_request')
+            query.encode('utf-8')
+        if set(request) - allowed:
+            fail('invalid_request')
+        return request
+    except (ValueError, UnicodeError, RecursionError, Rejected):
+        fail('invalid_request')
+
+
+def text(value, limit):
+    if not isinstance(value, str):
+        fail('invalid_response')
+    try:
+        encoded = value.encode('utf-8')
+    except UnicodeError:
+        fail('invalid_response')
+    # A plain-text view must never interpret markup. The caller renders this as
+    # plain text; truncate only at a complete UTF-8 character boundary.
+    return encoded[:limit].decode('utf-8', errors='ignore'), len(encoded) > limit
+
+
+def boolean(value):
+    return value if type(value) is bool else None
+
+
+def timestamp(value):
+    if not isinstance(value, str) or len(value) > 64:
+        return None
+    try:
+        stamp = datetime.datetime.fromisoformat(value.replace('Z', '+00:00'))
+        if stamp.tzinfo is None:
+            return None
+        milliseconds = int(stamp.timestamp() * 1000)
+        return milliseconds if 0 <= milliseconds <= 9007199254740991 else None
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def normalized_status(raw):
+    if not isinstance(raw, dict) or type(raw.get('api_version')) is not int or raw['api_version'] != 2:
+        fail('api_incompatible')
+    if raw.get('daemon') is not True:
+        fail('backend_unavailable')
+    storage = raw.get('storage_state')
+    if storage not in ('ready', 'locked', 'disabled', 'error'):
+        storage = 'unknown'
+    policy = raw.get('storage_policy')
+    if policy not in ('encrypted', 'plaintext', 'none'):
+        policy = 'unknown'
+    connection = {'ready': 'ready', 'degraded': 'offline', 'stopping': 'offline',
+                  'map-connection-refused': 'offline', 'initializing': 'connecting',
+                  'connecting': 'connecting', 'reconnecting': 'connecting',
+                  'authorization-required': 'authorization-required'}.get(raw.get('connectivity_state'), 'unknown')
+    release = raw.get('backend_release')
+    # This field is metadata, not an arbitrary backend detail/error string.
+    if not isinstance(release, str) or not re.fullmatch(r'[0-9][A-Za-z0-9.+_-]{0,127}', release):
+        release = 'unknown'
+    return {'apiVersion': 2, 'connection': connection, 'storage': storage, 'storagePolicy': policy,
+            'backendRelease': release, 'map': boolean(raw.get('map')), 'pbap': boolean(raw.get('pbap')),
+            'ancs': boolean(raw.get('ancs')), 'canReadHistory': storage == 'ready' and policy in ('encrypted', 'plaintext')}
+
+
+def messages_from(raw):
+    if not isinstance(raw, list) or len(raw) > 500:
+        fail('invalid_response')
+    messages = []
+    for row in raw[-200:]:
+        if not isinstance(row, dict) or type(row.get('outgoing')) is not bool:
+            fail('invalid_response')
+        stamp = timestamp(row.get('timestamp'))
+        if stamp is None:
+            continue  # Never invent a date for a malformed backend record.
+        body, cut = text(row.get('body'), 8192)
+        sender, _ = text(row.get('sender', ''), 256)
+        messages.append({'body': body, 'timestamp': stamp, 'incoming': not row['outgoing'],
+                         'sender': sender, 'bodyTruncated': cut or row.get('body_truncated') is not False,
+                         'attachmentCount': 0, 'attachments': []})
+    return messages
+
+
+def threads_from(raw, selected=None):
+    if not isinstance(raw, list) or len(raw) > 200:
+        fail('invalid_response')
+    result, seen = [], set()
+    for row in raw:
+        if not isinstance(row, dict) or not opaque(row.get('key'), 1024) or row['key'] in seen:
+            fail('invalid_response')
+        seen.add(row['key'])
+    for row in raw:
+        if selected is not None and row['key'] != selected:
+            continue
+        messages = messages_from(row.get('messages'))
+        if selected is not None:
+            return messages
+        stamp = timestamp(row.get('last_ts'))
+        if stamp is None:
+            continue
+        name, _ = text(row.get('name'), 256)
+        recipients = row.get('recipients')
+        if not isinstance(recipients, list) or len(recipients) > 64:
+            fail('invalid_response')
+        if any(not opaque(item, 320) for item in recipients):
+            fail('invalid_response')
+        if type(row.get('is_group')) is not bool:
+            fail('invalid_response')
+        preview = messages[-1]['body'] if messages else ''
+        result.append({'threadId': row['key'], 'names': [name], 'addresses': recipients,
+                       'preview': preview, 'timestamp': stamp, 'unread': any(item.get('outgoing') is False and item.get('read') is False
+                                     for item in row['messages'] if isinstance(item, dict)),
+                       'incoming': messages[-1]['incoming'] if messages else True,
+                       'isGroup': row['is_group'], 'attachmentCount': 0, 'attachments': [],
+                       'messagesTruncated': row.get('messages_truncated') is not False or len(row['messages']) > 200
+                       or len(messages) != len(row['messages'])})
+    if selected is not None:
+        fail('thread_unavailable')
+    return result
+
+
+def contacts_from(raw, search):
+    if not isinstance(raw, list) or len(raw) > 100:
+        fail('invalid_response')
+    result = []
+    for row in raw:
+        if not isinstance(row, dict):
+            fail('invalid_response')
+        name, _ = text(row.get('name'), 256)
+        if search:
+            addresses = [row.get('address')]
+        else:
+            phones, emails = row.get('phones'), row.get('emails')
+            if not isinstance(phones, list) or not isinstance(emails, list) or len(phones) > 64 or len(emails) > 64:
+                fail('invalid_response')
+            addresses = phones + emails
+        for address in addresses:
+            if not opaque(address, 320):
+                fail('invalid_response')
+            if len(result) < 200:
+                result.append({'name': name, 'number': address})
+    return result
+
+
+class Adapter:
+    def __init__(self, dbus, deadline):
+        self.dbus, self.deadline = dbus, deadline
+        self.bus = dbus.SessionBus(private=True)
+
+    def call(self, owner, path, interface, method, signature='', args=()):
+        message = self.dbus.lowlevel.MethodCallMessage(owner, path, interface, method)
+        message.set_auto_start(False)
+        message.append(*args, signature=signature)
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError()
+        reply = self.bus.send_message_with_reply_and_block(message, min(4, remaining))
+        values = reply.get_args_list()
+        if len(values) != 1 or not isinstance(values[0], str):
+            fail('invalid_response')
+        return str(values[0])
+
+    def owner(self):
+        value = self.call(BUS, BUS_PATH, BUS, 'GetNameOwner', 's', (SERVICE,))
+        if not valid_owner(value):
+            fail('invalid_response')
+        return value
+
+    def snapshot(self, owner, method, signature='', args=()):
+        raw = self.call(owner, PATH, INTERFACE, method, signature, args)
+        try:
+            if len(raw) > WIRE_LIMIT or len(raw.encode('utf-8')) > WIRE_LIMIT:
+                fail('response_too_large')
+            return json.loads(raw, object_pairs_hook=unique_pairs)
+        except (ValueError, UnicodeError, RecursionError):
+            fail('invalid_response')
+
+    def run(self, request):
+        owner = self.owner()
+        operation = request['operation']
+        if operation != 'status' and owner != request['expectedOwner']:
+            fail('backend_changed')
+        status = normalized_status(self.snapshot(owner, 'GetStatus'))
+        if self.owner() != owner:
+            fail('backend_changed')
+        items = []
+        if operation != 'status':
+            if not status['canReadHistory']:
+                fail('storage_unavailable')
+            if operation in ('threads', 'messages'):
+                raw = self.snapshot(owner, 'ListThreads', 'u', (self.dbus.UInt32(200),))
+                items = threads_from(raw, request['threadId'] if operation == 'messages' else None)
+            else:
+                query = request.get('query', '')
+                if query:
+                    raw = self.snapshot(owner, 'FindContacts', 's', (query,))
+                else:
+                    raw = self.snapshot(owner, 'ListContacts', 'uu', (self.dbus.UInt32(0), self.dbus.UInt32(100)))
+                items = contacts_from(raw, bool(query))
+            # A storage lock or daemon replacement invalidates the whole read.
+            status = normalized_status(self.snapshot(owner, 'GetStatus'))
+            if not status['canReadHistory']:
+                fail('storage_unavailable')
+            if self.owner() != owner:
+                fail('backend_changed')
+        return {'version': 1, 'ok': True, 'operation': operation, 'endpoint': dict(ENDPOINT),
+                'backendOwner': owner, **status, 'history': {'coverage': 'observed-only', 'truncated': True},
+                'items': items}
+
+
+def encode(result):
+    encoded = json.dumps(result, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+    if len(encoded) + 1 > OUTPUT_LIMIT:
+        fail('response_too_large')
+    return encoded + b'\n'
+
+
+def main():
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    resource.setrlimit(resource.RLIMIT_AS, (MEMORY_LIMIT, MEMORY_LIMIT))
+    logging.disable(logging.CRITICAL)
+    operation = None
+    def timed_out(_signal, _frame):
+        raise TimeoutError()
+    signal.signal(signal.SIGALRM, timed_out)
+    signal.alarm(18)
+    deadline = time.monotonic() + 18
+    try:
+        if len(sys.argv) != 1:
+            fail('invalid_request')
+        request = request_from(sys.stdin.buffer)
+        operation = request['operation']
+        try:
+            import dbus
+            import dbus.lowlevel
+        except ImportError:
+            fail('dependency')
+        payload = encode(Adapter(dbus, deadline).run(request))
+        sys.stdout.buffer.write(payload)
+        return 0
+    except Rejected as error:
+        code = error.code
+    except Exception as error:
+        # Only stable D-Bus error names are examined, never their message text.
+        name = error.get_dbus_name() if callable(getattr(error, 'get_dbus_name', None)) else ''
+        code = {'io.weirdware.BlueFerry.Error.AuthorizationRequired': 'authorization_required',
+                'io.weirdware.BlueFerry.Error.RateLimited': 'rate_limited',
+                'io.weirdware.BlueFerry.Error.ResponseTooLarge': 'response_too_large',
+                'org.freedesktop.DBus.Error.NameHasNoOwner': 'backend_unavailable',
+                'org.freedesktop.DBus.Error.ServiceUnknown': 'backend_unavailable'}.get(name, 'read_failed')
+    finally:
+        signal.alarm(0)
+    sys.stdout.buffer.write(encode({'version': 1, 'ok': False, 'operation': operation, 'code': code}))
+    return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())
