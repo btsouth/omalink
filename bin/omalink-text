@@ -1,0 +1,191 @@
+#!/usr/bin/python3
+"""One bounded stdin request, one owner-bound KDE Connect call, no subprocesses.
+
+Text stays in the private pipe and D-Bus messages, never argv or environment.
+KDE Connect 26.08.1: conversations sendWithoutConversation(av,s,av),
+replyToConversation(x,s,av); share shareText/shareUrl(s); notifications sendReply(s,s).
+"""
+import json
+import logging
+import re
+import resource
+import signal
+import sys
+import time
+
+ENVELOPE_LIMIT = 65536
+BODY_LIMIT = 8192
+SERVICE = 'org.kde.kdeconnect'
+DEVICE_IFACE = 'org.kde.kdeconnect.device'
+DBUS_IFACE = 'org.freedesktop.DBus'
+DBUS_PATH = '/org/freedesktop/DBus'
+
+
+class Rejected(Exception):
+    def __init__(self, code, message):
+        self.code, self.message = code, message
+
+
+def reject(code, message):
+    raise Rejected(code, message)
+
+
+def pairs_unique(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            reject('invalid_request', 'Request contains duplicate fields')
+        result[key] = value
+    return result
+
+
+def parse_request(stream):
+    raw = stream.read(ENVELOPE_LIMIT + 1)
+    if len(raw) > ENVELOPE_LIMIT:
+        reject('invalid_request', 'Request is too large')
+    try:
+        request = json.loads(raw.decode('utf-8'), object_pairs_hook=pairs_unique)
+    except (ValueError, UnicodeError, RecursionError):
+        reject('invalid_request', 'Request must be a valid UTF-8 JSON object')
+    if not isinstance(request, dict) or type(request.get('version')) is not int or request['version'] != 1:
+        reject('invalid_request', 'Unsupported request version')
+    operation = request.get('operation')
+    fields = {'share': set(), 'sms': {'destination'}, 'reply': {'threadId'}, 'notify-reply': {'replyId'}}
+    if not isinstance(operation, str) or operation not in fields:
+        reject('invalid_request', 'Unsupported text operation')
+    if set(request) != {'version', 'operation', 'deviceId', 'body'} | fields[operation]:
+        reject('invalid_request', 'Request fields do not match the operation')
+    if not isinstance(request['deviceId'], str) or not re.fullmatch(r'[A-Za-z0-9]{1,128}', request['deviceId']):
+        reject('invalid_device', 'Choose a valid phone')
+    body = request['body']
+    try:
+        valid_body = isinstance(body, str) and 0 < len(body.encode('utf-8')) <= BODY_LIMIT and '\0' not in body
+    except UnicodeError:
+        valid_body = False
+    if not valid_body:
+        reject('invalid_body', 'Text must contain between 1 and 8192 UTF-8 bytes without null characters')
+    if operation == 'sms':
+        destination = request['destination']
+        if not isinstance(destination, str) or not re.fullmatch(r'[+0-9(). \t-]{3,128}', destination) or len(re.sub(r'[^0-9]', '', destination)) < 3:
+            reject('invalid_destination', 'Enter a valid phone number')
+    elif operation == 'reply':
+        thread = request['threadId']
+        if not isinstance(thread, str) or not re.fullmatch(r'[0-9]{1,19}', thread) or int(thread) > 9223372036854775807:
+            reject('invalid_thread', 'Choose a valid conversation')
+    elif operation == 'notify-reply':
+        reply = request['replyId']
+        if not isinstance(reply, str) or not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9._:-]{0,127}', reply):
+            reject('invalid_reply', 'Choose a valid notification reply')
+    return request
+
+
+class Transport:
+    def __init__(self, dbus, deadline):
+        self.dbus = dbus
+        self.deadline = deadline
+        self.dispatched = False
+        self.bus = dbus.SessionBus(private=True)
+
+    def call(self, owner, path, interface, method, signature='', args=(), effect=False):
+        # Construct ourselves: dbus-python call_blocking logs arguments on a
+        # marshalling failure. Never allow those logs to contain message text.
+        message = self.dbus.lowlevel.MethodCallMessage(owner, path, interface, method)
+        message.set_auto_start(False)
+        message.append(*args, signature=signature)
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError()
+        if effect:
+            self.dispatched = True
+        reply = self.bus.send_message_with_reply_and_block(message, min(7 if effect else 2, remaining))
+        values = reply.get_args_list()
+        if len(values) == 0:
+            return None
+        if len(values) == 1:
+            return values[0]
+        raise ValueError('unexpected reply shape')
+
+    def owner(self):
+        owner = self.call(DBUS_IFACE, DBUS_PATH, DBUS_IFACE, 'GetNameOwner', 's', (SERVICE,))
+        if not isinstance(owner, str) or not re.fullmatch(r':[0-9]+\.[0-9]+', owner):
+            raise ValueError('invalid owner')
+        return str(owner)
+
+    def submit(self, request):
+        owner = self.owner()
+        path = '/modules/kdeconnect/devices/' + request['deviceId']
+        for prop, code, text in [('isPaired', 'unpaired', 'Pair this phone before sending'),
+                                 ('isReachable', 'offline', 'Connect this phone before sending')]:
+            value = self.call(owner, path, DBUS_IFACE + '.Properties', 'Get', 'ss', (DEVICE_IFACE, prop))
+            if type(value) is not self.dbus.Boolean:
+                raise ValueError('invalid property')
+            if not value:
+                reject(code, text)
+        operation = request['operation']
+        plugin = {'share': 'kdeconnect_share', 'sms': 'kdeconnect_sms', 'reply': 'kdeconnect_sms',
+                  'notify-reply': 'kdeconnect_notifications'}[operation]
+        enabled = self.call(owner, path, DEVICE_IFACE, 'hasPlugin', 's', (plugin,))
+        if type(enabled) is not self.dbus.Boolean:
+            raise ValueError('invalid plugin status')
+        if not enabled:
+            reject('capability_unavailable', 'Enable this feature in KDE Connect on both devices')
+        if self.owner() != owner:
+            reject('backend_changed', 'KDE Connect restarted; refresh before sending')
+        empty = self.dbus.Array([], signature='v')
+        body = request['body']
+        if operation == 'share':
+            method = 'shareUrl' if re.match(r'^https?://', body) else 'shareText'
+            self.call(owner, path + '/share', DEVICE_IFACE + '.share', method, 's', (body,), effect=True)
+        elif operation == 'sms':
+            # QVariantList of ConversationAddress structs, each containing one
+            # complete number. Preserve formatting; never split recipients.
+            address = self.dbus.Struct((request['destination'],), signature='s', variant_level=1)
+            addresses = self.dbus.Array([address], signature='v')
+            self.call(owner, path, DEVICE_IFACE + '.conversations', 'sendWithoutConversation',
+                      'avsav', (addresses, body, empty), effect=True)
+        elif operation == 'reply':
+            self.call(owner, path, DEVICE_IFACE + '.conversations', 'replyToConversation',
+                      'xsav', (self.dbus.Int64(request['threadId']), body, empty), effect=True)
+        else:
+            self.call(owner, path + '/notifications', DEVICE_IFACE + '.notifications', 'sendReply',
+                      'ss', (request['replyId'], body), effect=True)
+
+
+def result(ok, state, code, text):
+    print(json.dumps({'version': 1, 'ok': ok, 'state': state, 'code': code, 'statusText': text}, separators=(',', ':')))
+    return 0 if ok else 1
+
+
+def main():
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    logging.disable(logging.CRITICAL)
+    transport = None
+    deadline = time.monotonic() + 20
+    def timed_out(_signum, _frame):
+        raise TimeoutError()
+    signal.signal(signal.SIGALRM, timed_out)
+    signal.alarm(20)
+    try:
+        if len(sys.argv) != 1:
+            reject('invalid_request', 'Pass a JSON request through standard input, without arguments')
+        request = parse_request(sys.stdin.buffer)
+        try:
+            import dbus
+            import dbus.lowlevel
+        except ImportError:
+            reject('dependency', 'Install python-dbus to send text and messages')
+        transport = Transport(dbus, deadline)
+        transport.submit(request)
+        return result(True, 'accepted', 'accepted', 'Request accepted by KDE Connect; delivery is not verified')
+    except Rejected as error:
+        return result(False, 'not-submitted', error.code, error.message)
+    except Exception:
+        if transport is not None and transport.dispatched:
+            return result(False, 'unconfirmed', 'dispatch_unconfirmed', 'Request outcome is unknown; check the phone before sending again')
+        return result(False, 'not-submitted', 'backend_unavailable', 'Could not submit the request; check KDE Connect and refresh')
+    finally:
+        signal.alarm(0)
+
+
+if __name__ == '__main__':
+    sys.exit(main())
