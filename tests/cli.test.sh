@@ -543,6 +543,8 @@ jq -e 'length == 2 and .[0].threadId == 7 and .[0].unread == true and .[0].names
 jq -e '.[0].attachments[0] == {partId: 42, mimeType: "image/jpeg", thumbnail: "VGh1bWI=", unique: "PART_1.jpeg"} and .[1].attachments == []' <<<"$conversations" >/dev/null
 many_threads="$(OMALINK_TEST_MANY_THREADS=1 XDG_DATA_HOME="$temp_dir/data" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" conversations abc123)"
 jq -e 'length == 200 and .[0].timestamp == 9999 and .[-1].timestamp == 102' <<<"$many_threads" >/dev/null
+many_contact_threads="$(OMALINK_TEST_MANY_THREADS=1 XDG_DATA_HOME="$temp_dir/data-many" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" conversations abc123)"
+jq -e 'length == 200 and .[0].timestamp == 9999 and .[-1].timestamp == 102' <<<"$many_contact_threads" >/dev/null
 many_messages="$(OMALINK_TEST_MANY_MESSAGES=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" messages abc123 7)"
 jq -e 'length == 200 and .[-1].body == "body 300" and .[0].body == "body 101"' <<<"$many_messages" >/dev/null
 thread_messages="$(PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" messages abc123 7)"
