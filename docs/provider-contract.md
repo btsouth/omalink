@@ -153,6 +153,10 @@ cross-provider identity collisions, opaque identifiers, unsupported tasks,
 observed-only and truncated history, schema rejection, stale reads, owner
 replacement and backend loss. They do not replace real backend acceptance.
 
+Optional message-window name and conversation hints must be strings or null;
+thread hints must be strings, nonnegative safe integers or null. Malformed hints
+are rejected before an existing draft or cache changes.
+
 Run `bash tests/provider-runtime.test.sh` only inside omabox. It exercises the
 actual Messages component with synthetic KDE routes, rejected provider summons,
 namespaced history and delayed responses. Existing selection and send runtime

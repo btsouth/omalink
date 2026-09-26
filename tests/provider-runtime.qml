@@ -41,7 +41,10 @@ ShellRoot {
           JSON.stringify({endpoint:{provider:"blip",instanceId:"local",deviceId:"old",accountId:null},deviceId:"old"}),
           JSON.stringify({endpoint:Object.assign({},valid,{instanceId:"remote"}),deviceId:"old"}),
           JSON.stringify({endpoint:Object.assign({},valid,{accountId:"account"}),deviceId:"old"}),
-          JSON.stringify({endpoint:null,deviceId:"old"}), JSON.stringify({endpoint:valid,deviceId:"new"})]
+          JSON.stringify({endpoint:null,deviceId:"old"}), JSON.stringify({endpoint:valid,deviceId:"new"}),
+          JSON.stringify({endpoint:valid,deviceName:{toString:0}}),
+          JSON.stringify({endpoint:valid,conversationHint:{toString:0}}),
+          JSON.stringify({endpoint:valid,threadId:{toString:0}})]
         for (var i = 0; i < rejected.length; i++)
           test.check(messages.open(rejected[i]) === false, "invalid route accepted: " + i)
         test.check(messages.deviceId === "old" && messages.generation === test.oldGeneration,

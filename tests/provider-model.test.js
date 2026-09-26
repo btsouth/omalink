@@ -12,6 +12,8 @@ for (const payload of [null, [], {}, {deviceId:123}, {deviceId:"../abc"},
   {endpoint:{...kde,instanceId:"remote"},deviceId:"abc123"},
   {endpoint:{...kde,accountId:"account"},deviceId:"abc123"},
   {endpoint:{...kde,accountId:""},deviceId:"abc123"},
+  {deviceId:"abc123",deviceName:{toString:0}}, {deviceId:"abc123",conversationHint:[]},
+  {deviceId:"abc123",threadId:{toString:0}}, {deviceId:"abc123",threadId:Infinity},
   {endpoint:kde,deviceId:"other"}, {endpoint:kde,deviceId:null}])
   assert.equal(provider.kdeEndpointFromPayload(payload),null,"invalid explicit route never falls back")
 

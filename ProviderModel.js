@@ -45,6 +45,14 @@ function kdeEndpoint(deviceId) {
 // explicit future route must never fall back to a raw KDE device ID.
 function kdeEndpointFromPayload(payload) {
   if (!record(payload)) return null
+  // Validate optional hints before a view clears its current draft/cache.
+  // JSON objects can shadow toString and make later display coercion throw.
+  for (var field of ["deviceName", "conversationHint"]) {
+    if (payload[field] !== undefined && payload[field] !== null
+        && typeof payload[field] !== "string") return null
+  }
+  if (payload.threadId !== undefined && payload.threadId !== null
+      && typeof payload.threadId !== "string" && !integer(payload.threadId)) return null
   var explicit = Object.prototype.hasOwnProperty.call(payload, "endpoint")
   var endpoint = explicit ? normalizeEndpoint(payload.endpoint) : kdeEndpoint(payload.deviceId)
   if (!endpoint || endpoint.provider !== "kdeconnect"
