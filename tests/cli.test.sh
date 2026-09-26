@@ -9,6 +9,8 @@ trap 'rm -rf "$temp_dir"' EXIT
 cat >"$temp_dir/kdeconnect-cli" <<'EOF'
 #!/usr/bin/env bash
 if [[ ${1:-} == --list-available ]]; then
+  [[ -z ${OMALINK_TEST_DISCOVERY_FAIL:-} ]] || exit 1
+  [[ -z ${OMALINK_TEST_DISCOVERY_EMPTY:-} ]] || exit 0
   if [[ -n ${OMALINK_TEST_EXTRA_DEVICE:-} ]]; then
     printf '%s\n' 'abc123 Pixel 9' 'def456 Galaxy S25' '../bad Injected'
   else
@@ -320,6 +322,13 @@ mkdir -p "$many_contacts_dir"
 } >"$many_contacts_dir/many.vcf"
 
 status="$(PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" status)"
+if failed_status="$(OMALINK_TEST_DISCOVERY_FAIL=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" status)"; then
+  echo "failed discovery was reported as success" >&2
+  exit 1
+fi
+[[ $(jq -r '.ok' <<<"$failed_status") == false ]]
+empty_status="$(OMALINK_TEST_DISCOVERY_EMPTY=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" status)"
+[[ $(jq -r '.ok' <<<"$empty_status") == true && $(jq '.devices | length' <<<"$empty_status") == 0 ]]
 junk_status="$(OMALINK_TEST_JUNK=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" status)"
 jq -e '.devices[0].battery.charge == null and .devices[0].battery.charging == false
   and .devices[0].media.volume == 0 and .devices[0].media.isPlaying == false

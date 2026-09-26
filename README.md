@@ -83,6 +83,14 @@ you configured yourself.
 
 ## Messaging notes
 
+The panel remembers your selected phone for messages and notifications. A single
+available phone is selected initially; with several phones, choose **Use this
+phone**. Disconnecting the selected phone does not switch to another one.
+The selected ID and last known name are stored in the widget's `shell.json`
+settings. Switching phones clears unsent panel share/notification-reply drafts.
+Actions pause when status cannot be refreshed; an unavailable selected phone
+remains visible until it reconnects or you select another.
+
 OmaLink uses KDE Connect's Android messaging interface. It can read SMS/MMS
 conversation history, send SMS messages, and show that a message contains an
 attachment. OmaLink does not yet send attachments or expose full RCS
@@ -197,6 +205,7 @@ omabox run -- omarchy plugin validate .
 omabox run -- bash tests/cli.test.sh
 omabox run -- python tests/audit.test.py
 omabox run -- bash tests/runtime.test.sh
+omabox run -- bash tests/selection-runtime.test.sh
 ```
 
 The test suite uses mock phone data and does not send messages.
@@ -210,6 +219,9 @@ The test suite uses mock phone data and does not send messages.
 See the [product review and proposed roadmap](docs/product-roadmap.md) for
 priorities, iPhone integration options, and the validation required before
 claiming support. These are proposed features, not current capabilities.
+The [implementation plan](docs/implementation-plan.md) breaks that work into
+reviewable changes and records completed implementation separately from
+physical-phone acceptance.
 
 ## License
 

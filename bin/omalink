@@ -255,7 +255,12 @@ status() {
   local raw line id name device_path charge charging network_strength network_type notifications
   local -a devices=()
   local media
-  raw="$(dbus_bounded 5s kdeconnect-cli --list-available --id-name-only)"
+  # Enumeration failure is not a successful empty list. Preserve the command's
+  # exit status while keeping the same timeout and byte ceiling as other reads.
+  if ! raw="$(timeout --kill-after=1s 5s kdeconnect-cli --list-available --id-name-only 2>/dev/null | head -c "$capture_max_bytes")"; then
+    jq -cn '{ok: false, installed: true, devices: [], statusText: "Could not refresh phone status"}'
+    return 1
+  fi
 
   while IFS= read -r line; do
     [[ -n $line ]] || continue
