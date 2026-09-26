@@ -1553,13 +1553,13 @@ Panel {
         }
 
         PanelSeparator {
-          visible: phone.installed
           Layout.fillWidth: true
           foreground: root.foreground
         }
 
+        // Diagnostics stays reachable when status never loaded or KDE Connect
+        // is missing, which are the cases it exists for.
         Flow {
-          visible: phone.installed
           Layout.fillWidth: true
           spacing: Style.space(4)
 
