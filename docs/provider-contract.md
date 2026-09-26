@@ -46,6 +46,28 @@ KDE device IDs retain their existing 1 to 128 ASCII alphanumeric restriction.
 Numeric KDE thread IDs must be explicitly converted to strings by the KDE
 adapter; generic code must not coerce malformed identity fields.
 
+## Current KDE integration
+
+Service exposes the selected phone as `selectedEndpoint` while preserving the
+existing `selectedDeviceId` setting and unread-state files. Panel includes the
+endpoint when opening Messages. `kdeEndpointFromPayload(payload)` accepts that
+explicit local KDE endpoint, or a legacy valid `deviceId` when the endpoint
+field is absent. An explicit endpoint with another provider, instance or account
+is rejected. A supplied legacy device ID must match the endpoint exactly.
+Malformed or unsupported explicit endpoints never fall back to a raw device ID.
+
+Messages rejects invalid or over-65,536-code-unit open payloads without changing
+an already open view or dispatching helper commands. Its raw KDE device ID is
+derived from the validated endpoint. Endpoint changes invalidate existing read
+generations and clear drafts/history; thread cache keys include the endpoint.
+This is a routing boundary for the existing KDE backend, not a generic provider
+selector. No selection migration or persistent message storage is introduced.
+
+The existing KDE view still uses its own request generations. Unique backend
+owner capture and subscriptions are not wired into that transport yet. The
+owner-aware functions below define and test the future adapter contract; they
+must not be presented as a live owner-transition guarantee.
+
 ## Version 1 snapshot
 
 ```javascript
@@ -130,3 +152,8 @@ Run the pure fixtures with `node tests/provider-model.test.js`. They cover
 cross-provider identity collisions, opaque identifiers, unsupported tasks,
 observed-only and truncated history, schema rejection, stale reads, owner
 replacement and backend loss. They do not replace real backend acceptance.
+
+Run `bash tests/provider-runtime.test.sh` only inside omabox. It exercises the
+actual Messages component with synthetic KDE routes, rejected provider summons,
+namespaced history and delayed responses. Existing selection and send runtime
+tests also cover the integration. No real phone or iPhone backend is contacted.

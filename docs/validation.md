@@ -39,6 +39,7 @@ omabox run -- bash tests/files.test.sh
 omabox run -- bash tests/runtime.test.sh
 omabox run -- bash tests/selection-runtime.test.sh
 omabox run -- bash tests/send-runtime.test.sh
+omabox run -- bash tests/provider-runtime.test.sh
 omabox run -- bash tests/file-share-runtime.test.sh
 omabox run -- bash tests/private-request-runtime.test.sh
 omabox run -- /usr/bin/python3 tests/text-transport.test.py
@@ -49,7 +50,8 @@ package in addition to the runtime `python-dbus` dependency.
 
 These suites use fake phone data and controlled transports. They cover helper
 boundaries, capabilities, selected-phone routing, stale replies, message
-outcomes, file submission, QML loading, and lifecycle behavior. Inspect the
+outcomes, rejected provider routes, endpoint-scoped caches, file submission, QML
+loading, and lifecycle behavior. Inspect the
 affected UI in omabox as well, including keyboard navigation and both light and
 dark themes. A successful CI job does not imply these checks ran.
 

@@ -3,6 +3,18 @@ const provider = require("../ProviderModel.js")
 
 const kde = provider.kdeEndpoint("abc123")
 const ferry = {...kde, provider: "blueferry"}
+assert.deepEqual(provider.kdeEndpointFromPayload({deviceId:"abc123"}),kde)
+assert.deepEqual(provider.kdeEndpointFromPayload({endpoint:kde}),kde)
+assert.deepEqual(provider.kdeEndpointFromPayload({endpoint:kde,deviceId:"abc123"}),kde)
+for (const payload of [null, [], {}, {deviceId:123}, {deviceId:"../abc"},
+  {endpoint:null,deviceId:"abc123"}, {endpoint:{},deviceId:"abc123"},
+  {endpoint:ferry,deviceId:"abc123"}, {endpoint:{...kde,provider:"blip"},deviceId:"abc123"},
+  {endpoint:{...kde,instanceId:"remote"},deviceId:"abc123"},
+  {endpoint:{...kde,accountId:"account"},deviceId:"abc123"},
+  {endpoint:{...kde,accountId:""},deviceId:"abc123"},
+  {endpoint:kde,deviceId:"other"}, {endpoint:kde,deviceId:null}])
+  assert.equal(provider.kdeEndpointFromPayload(payload),null,"invalid explicit route never falls back")
+
 assert.deepEqual(kde, {provider:"kdeconnect", instanceId:"local", deviceId:"abc123", accountId:null})
 assert.notEqual(provider.endpointKey(kde), provider.endpointKey(ferry))
 assert.notEqual(provider.threadKey(kde, "7"), provider.threadKey(ferry, "7"))

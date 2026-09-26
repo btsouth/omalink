@@ -8,6 +8,7 @@ import Quickshell.Widgets
 import qs.Commons
 import qs.Ui
 import "Model.js" as Model
+import "ProviderModel.js" as Providers
 import "SendState.js" as SendState
 import "PrivateText.js" as PrivateText
 
@@ -16,7 +17,9 @@ Item {
 
   property bool opened: false
   property int generation: 0
-  property string deviceId: ""
+  property var endpoint: null
+  readonly property string endpointKey: Providers.endpointKey(endpoint)
+  readonly property string deviceId: endpoint ? endpoint.deviceId : ""
   property string deviceName: ""
   property var conversations: []
   property var contacts: []
@@ -63,13 +66,16 @@ Item {
   readonly property string fontFamily: Style.font.family
 
   function open(payloadJson) {
-    var payload = {}
-    try { payload = JSON.parse(String(payloadJson || "{}")) || {} } catch (parseError) { payload = {} }
-    var nextDeviceId = String(payload.deviceId || "")
-    if (sending && nextDeviceId !== deviceId) return
-    if (!opened || nextDeviceId !== deviceId) close()
-    deviceId = nextDeviceId
-    deviceName = String(payload.deviceName || nextDeviceId).slice(0, 256)
+    if (typeof payloadJson !== "string" || payloadJson.length > 65536) return false
+    var payload
+    try { payload = JSON.parse(payloadJson) } catch (parseError) { return false }
+    var nextEndpoint = Providers.kdeEndpointFromPayload(payload)
+    if (!nextEndpoint) return false
+    var nextKey = Providers.endpointKey(nextEndpoint)
+    if (sending && nextKey !== endpointKey) return false
+    if (!opened || nextKey !== endpointKey) close()
+    endpoint = nextEndpoint
+    deviceName = String(payload.deviceName || deviceId).slice(0, 256)
     pendingOpenTitle = String(payload.conversationHint || "")
     pendingOpenThreadId = payload.threadId === undefined || payload.threadId === null
       ? "" : String(payload.threadId)
@@ -78,6 +84,7 @@ Item {
     refreshContacts()
     refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+    return true
   }
 
   function close() {
@@ -156,7 +163,7 @@ Item {
       || String(selectedConversation.threadId) !== threadId
       || String(selectedConversation.localOperationId || "") !== String(conversation.localOperationId || "")
     selectedConversation = conversation
-    if (changingThread) messages = SendState.messages(messageCache[threadId] || [], conversation, sendOperations)
+    if (changingThread) messages = SendState.messages(messageCache[threadCacheKey(conversation.threadId)] || [], conversation, sendOperations)
     if (conversation.threadId === null || conversation.threadId === undefined) {
       loading = false
       return
@@ -170,10 +177,16 @@ Item {
     threadProcess.running = true
   }
 
+  function threadCacheKey(threadId) {
+    return threadId === null || threadId === undefined
+      ? "" : Providers.threadKey(endpoint, String(threadId))
+  }
+
   function setThreadMessages(threadId, nextMessages) {
+    var key = threadCacheKey(threadId)
+    if (!key) return
     var history = SendState.historyOnly(nextMessages)
     messages = SendState.messages(history, selectedConversation, sendOperations)
-    var key = String(threadId)
     var order = cacheOrder.filter(function(item) { return item !== key }).concat([key]).slice(-5)
     var updatedCache = {}
     for (var i = 0; i < order.length; i++) {
@@ -219,7 +232,7 @@ Item {
       if (bound && bound.threadId !== "") selectedConversation = bound.conversation
     }
     if (selectedConversation)
-      messages = SendState.messages(messageCache[String(selectedConversation.threadId)] || [], selectedConversation, sendOperations)
+      messages = SendState.messages(messageCache[threadCacheKey(selectedConversation.threadId)] || [], selectedConversation, sendOperations)
   }
 
   function replaceSend(operation) {
@@ -238,9 +251,8 @@ Item {
       error = "Local send activity is full. Copy any messages you need before closing this window."
       return null
     }
-    var threadId = conversation && conversation.threadId !== null ? String(conversation.threadId) : ""
     var operation = SendState.create(String(++nextSendId), deviceId, conversation, number,
-                                     body, Date.now(), messageCache[threadId])
+                                     body, Date.now(), messageCache[threadCacheKey(conversation && conversation.threadId)])
     if (!valid) operation.state = "failed"
     updateSendOperations(retained.concat([operation]))
     if (!valid) {

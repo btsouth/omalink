@@ -205,7 +205,8 @@ Pure-model and actual-QML regression coverage includes prior identical messages,
 missing snapshots, reused history records, two provisional recipients, editing
 while another thread loads, partial failed reads, uncertainty, preserved text,
 exact Unicode contents and late completion after close/reopen. New observations
-remain in memory; content-bearing legacy helper arguments are not migrated yet.
+remain in memory. Content-bearing legacy helper arguments have been replaced
+with bounded private stdin requests and direct owner-checked D-Bus dispatch.
 Physical delivery, screen-reader acceptance and complete translation remain open.
 
 ### PR 3: capability-aware setup and diagnostics
@@ -237,9 +238,10 @@ checks pass. Actual Panel/Service tests cover capability changes during reads,
 unknown pairing/reachability, offline selection, stale status, and blocked actions.
 Send/lifecycle regression suites and plugin validation pass in omabox. Dark
 1920x1080 and light 1366x768 setup views were inspected. Real-phone permissions,
-first-use success and screen-reader acceptance remain open. The legacy SMS CLI
-has a narrow backend-restart race after preflight; no failed dispatch is retried
-or represented as definitely unsent.
+first-use success and screen-reader acceptance remain open. Private text
+transport now removes the legacy SMS CLI path and checks the unique backend
+owner before direct D-Bus dispatch. A lost or failed response after dispatch
+remains unconfirmed and is never automatically retried.
 
 ## Phase 2: transfers, handoff and the provider boundary
 
@@ -289,6 +291,18 @@ advertised or enabled in this picker slice.
   and avoid logging or passing sensitive text in command arguments.
 
 ### PR 6: extract the provider boundary with synthetic fixtures
+
+Implemented foundation: canonical endpoint/thread identity, strict local KDE
+message-route validation, namespaced in-memory thread caches, and bounded v1
+metadata fixtures. Existing selected KDE IDs and unread files are unchanged.
+Pure and isolated runtime tests cover future-provider route rejection, preserved
+drafts, cross-phone thread collisions and delayed results. See the
+[provider contract](provider-contract.md).
+
+This is not the completed provider extraction. Generic snapshot/owner checks are
+pure contract fixtures; KDE reads do not yet subscribe to unique owner changes.
+BlueFerry and Blip transports, full endpoint selection and migrations remain
+future work. No iPhone messaging capability is enabled by this foundation.
 
 - [ ] Keep the existing KDE implementation behind the documented contract.
   Implement capability and connection normalization, cancellation and owner

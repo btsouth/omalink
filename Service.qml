@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import "Model.js" as Model
+import "ProviderModel.js" as Providers
 
 Item {
   id: root
@@ -24,6 +25,8 @@ Item {
   readonly property string freshnessText: lastSuccessAt <= 0 ? qsTr("No successful refresh yet")
     : (stale ? qsTr("Outdated · last checked %1") : qsTr("Last checked %1")).arg(Qt.formatTime(new Date(lastSuccessAt), "hh:mm:ss"))
   readonly property string selectedDeviceId: Model.selectedDeviceId(devices, String(setting("selectedDeviceId", "")))
+  readonly property var selectedEndpoint: Providers.kdeEndpoint(selectedDeviceId)
+  readonly property string selectedEndpointKey: Providers.endpointKey(selectedEndpoint)
   readonly property var selectedDevice: Model.deviceById(devices, selectedDeviceId)
   readonly property string selectedDeviceName: selectedDevice ? selectedDevice.name
     : String(setting("selectedDeviceName", "Selected phone")).slice(0, 256)

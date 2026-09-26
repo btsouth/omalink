@@ -91,6 +91,9 @@ ShellRoot {
         test.check(panel.activePhoneId === "def456", "discovery reorder changed selection")
         panel.openMessages({})
         test.check(JSON.parse(test.launched).deviceId === "def456", "Messages launch used another phone")
+        var endpoint = JSON.parse(test.launched).endpoint
+        test.check(endpoint.provider === "kdeconnect" && endpoint.instanceId === "local"
+          && endpoint.deviceId === "def456" && endpoint.accountId === null, "Messages launch lost endpoint identity")
         panel.refreshUnread()
       } else if (test.step === 2) {
         test.check(panel.unreadRaw[0].names[0] === "def456", "unread read not routed to selected phone")

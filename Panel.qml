@@ -126,7 +126,8 @@ Panel {
   }
 
   function openMessages(payload) {
-    if (!messagesReady) return
+    if (!messagesReady || !phone.selectedEndpoint) return
+    payload.endpoint = phone.selectedEndpoint
     payload.deviceId = activePhoneId
     payload.deviceName = phone.selectedDeviceName
     root.close()

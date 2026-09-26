@@ -41,6 +41,19 @@ function kdeEndpoint(deviceId) {
   return normalizeEndpoint({provider: "kdeconnect", instanceId: "local", deviceId: deviceId, accountId: null})
 }
 
+// Compatibility boundary for the only currently implemented transport. An
+// explicit future route must never fall back to a raw KDE device ID.
+function kdeEndpointFromPayload(payload) {
+  if (!record(payload)) return null
+  var explicit = Object.prototype.hasOwnProperty.call(payload, "endpoint")
+  var endpoint = explicit ? normalizeEndpoint(payload.endpoint) : kdeEndpoint(payload.deviceId)
+  if (!endpoint || endpoint.provider !== "kdeconnect"
+      || endpoint.instanceId !== "local" || endpoint.accountId !== null) return null
+  if (Object.prototype.hasOwnProperty.call(payload, "deviceId")
+      && payload.deviceId !== endpoint.deviceId) return null
+  return endpoint
+}
+
 function endpointParts(endpoint) {
   var value = normalizeEndpoint(endpoint)
   return value ? [value.provider, value.instanceId, value.deviceId, value.accountId] : null
@@ -142,7 +155,7 @@ function capabilityAvailable(snapshot, key) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {schemaVersion: schemaVersion, maxSnapshotLength: maxSnapshotLength,
-    normalizeEndpoint: normalizeEndpoint, kdeEndpoint: kdeEndpoint, endpointKey: endpointKey,
+    normalizeEndpoint: normalizeEndpoint, kdeEndpoint: kdeEndpoint, kdeEndpointFromPayload: kdeEndpointFromPayload, endpointKey: endpointKey,
     threadKey: threadKey, requestContext: requestContext, replyIsCurrent: replyIsCurrent,
     normalizeConnection: normalizeConnection, normalizeCapabilities: normalizeCapabilities,
     normalizeHistory: normalizeHistory, normalizeSnapshot: normalizeSnapshot,
