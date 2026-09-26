@@ -100,6 +100,20 @@ support, but OmaLink has not implemented or validated that workflow.
 Message history is requested from the phone when needed. OmaLink does not add
 its own cloud service or persistent message database.
 
+Sends distinguish **Submitting**, **Accepted by KDE Connect**, **Unconfirmed**
+and **Not submitted**. A successful helper call means acceptance, not delivery.
+OmaLink makes at most six additional history reads over a 30-second observation
+window. If confirmation remains unavailable, check your phone before using
+**Edit copy** to prepare another send. OmaLink never retries automatically.
+
+A matching outgoing history record is labeled separately from delivery. The
+match uses exact text, time and a previously loaded conversation snapshot;
+KDE Connect does not expose a corresponding send ID here. Simultaneous identical
+messages sent on the phone remain ambiguous, and new or unviewed conversations
+without a prior snapshot stay unconfirmed. Up to 100 local send records remain
+in memory until the window closes; closing clears them and does not cancel a
+send already submitted to the phone.
+
 ## Media controls
 
 OmaLink shows the phone's active media player in the panel with play/pause,
@@ -199,6 +213,7 @@ Run the checks in an isolated desktop with [omabox](https://github.com/btsouth/o
 
 ```sh
 node tests/model.test.js
+node tests/send-state.test.js
 bash tests/qml.test.sh
 shellcheck -S warning bin/omalink
 omabox run -- omarchy plugin validate .
@@ -206,6 +221,7 @@ omabox run -- bash tests/cli.test.sh
 omabox run -- python tests/audit.test.py
 omabox run -- bash tests/runtime.test.sh
 omabox run -- bash tests/selection-runtime.test.sh
+omabox run -- bash tests/send-runtime.test.sh
 ```
 
 The test suite uses mock phone data and does not send messages.
