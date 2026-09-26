@@ -278,16 +278,28 @@ function updateConversationAfterSend(conversations, threadId, body, timestamp) {
 }
 
 function phoneKey(value) {
-  var digits = String(value || "").replace(/[^0-9]/g, "")
-  return digits.length > 10 ? digits.slice(-10) : digits
+  return String(value || "").replace(/[^0-9]/g, "").replace(/^0+/, "")
+}
+
+// Country codes and domestic trunk prefixes vary, so compare the shorter
+// significant number with the longer number's suffix. Seven digits is the
+// shortest match Android itself treats as meaningful; shorter codes are left
+// untouched rather than being attributed to an arbitrary contact.
+function phoneNumbersMatch(left, right) {
+  var leftKey = phoneKey(left)
+  var rightKey = phoneKey(right)
+  if (leftKey === "" || rightKey === "") return false
+  if (leftKey === rightKey) return true
+  var shorter = leftKey.length <= rightKey.length ? leftKey : rightKey
+  var longer = leftKey.length <= rightKey.length ? rightKey : leftKey
+  return shorter.length >= 7 && longer.slice(-shorter.length) === shorter
 }
 
 function conversationMatchesNumber(conversation, number) {
   if (!conversation || !Array.isArray(conversation.addresses)) return false
-  var key = phoneKey(number)
-  if (key === "") return false
+  if (phoneKey(number) === "") return false
   for (var i = 0; i < conversation.addresses.length; i++) {
-    if (phoneKey(conversation.addresses[i]) === key) return true
+    if (phoneNumbersMatch(conversation.addresses[i], number)) return true
   }
   return false
 }
@@ -581,6 +593,7 @@ if (typeof module !== "undefined") {
     parseMessages: parseMessages,
     updateConversationAfterSend: updateConversationAfterSend,
     phoneKey: phoneKey,
+    phoneNumbersMatch: phoneNumbersMatch,
     conversationMatchesNumber: conversationMatchesNumber,
     upsertConversationAfterSms: upsertConversationAfterSms,
     mergePendingConversation: mergePendingConversation,
