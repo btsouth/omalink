@@ -2,6 +2,9 @@
 
 ## 0.3.0 - Unreleased
 
+- Stop the notification monitor when the shell kills its watcher, instead of
+  leaving it running for up to an hour, and remove work directories left by
+  killed watchers. The watcher now needs `setpriv` from util-linux.
 - Name the sender in text and chat popups ("New message from Rebecca") without
   showing the message. Hidden panel content keeps popups to the app name.
 - Refresh phone status in about a quarter second instead of over two: device
