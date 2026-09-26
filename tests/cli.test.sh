@@ -167,12 +167,22 @@ case "${*: -1}" in
     elif [[ -n ${OMALINK_TEST_MANY_THREADS:-} ]]; then
       printf '{"type":"av","data":[['
       for index in $(seq 1 300); do
-        printf '{"type":"(isa(s)xiixixa(xsss))","data":[1,"Thread %s",[["+155****%04d"]],%s,1,0,%s,10,-1,[]]},' \
-          "$index" "$index" "$index" "$index"
+        printf '{"type":"(isa(s)xiixixa(xsss))","data":[1,"Thread %s",[' "$index"
+        if [[ -n ${OMALINK_TEST_MANY_CONTACT_ADDRESSES:-} ]]; then
+          for address in $(seq 1 20); do
+            contact_index=$(( (index - 1) * 20 + address ))
+            (( contact_index <= 2000 )) || contact_index=$(( (contact_index - 1) % 2000 + 1 ))
+            (( address == 1 )) || printf ','
+            printf '["+1555%06d"]' "$contact_index"
+          done
+        else
+          printf '["+155****%04d"]' "$index"
+        fi
+        printf '],%s,1,0,%s,10,-1,[]]},' "$index" "$index"
       done
       printf '{"type":"(isa(s)xiixixa(xsss))","data":[1,"Newest",[["+155****0001"]],9999,1,0,999,10,-1,[]]}]]}\n'
     elif [[ -n ${OMALINK_TEST_INTL_CONTACTS:-} ]]; then
-      printf '%s\n' '{"type":"av","data":[[{"type":"(isa(s)xiixixa(xsss))","data":[1,"Hi",[["+61436000001"]],2000,1,0,7,10,-1,[]]},{"type":"(isa(s)xiixixa(xsss))","data":[1,"Wrong area",[["+12125551234"]],1500,1,0,9,12,-1,[]]},{"type":"(isa(s)xiixixa(xsss))","data":[1,"Code",[["OKTA"]],1000,1,0,8,11,-1,[]]}]]}'
+      printf '%s\n' '{"type":"av","data":[[{"type":"(isa(s)xiixixa(xsss))","data":[1,"Hi",[["+61436000001"]],2000,1,0,7,10,-1,[]]},{"type":"(isa(s)xiixixa(xsss))","data":[1,"Wrong area",[["+12125551234"]],1500,1,0,9,12,-1,[]]},{"type":"(isa(s)xiixixa(xsss))","data":[1,"Reverse",[["0436000002"]],1400,1,0,11,14,-1,[]]},{"type":"(isa(s)xiixixa(xsss))","data":[1,"Duplicate",[["+13125551234"]],1250,1,0,10,13,-1,[]]},{"type":"(isa(s)xiixixa(xsss))","data":[1,"Code",[["OKTA"]],1000,1,0,8,11,-1,[]]}]]}'
     elif [[ -n ${COLD_CONVERSATION_CACHE:-} && ! -e "$0.requested" ]]; then
       printf '%s\n' '{"type":"av","data":[[]]}'
     else
@@ -304,7 +314,9 @@ EOF
 intl_contact_dir="$temp_dir/data-intl/kpeoplevcard/kdeconnect-abc123"
 mkdir -p "$intl_contact_dir"
 printf 'BEGIN:VCARD\r\nVERSION:2.1\r\nFN:Jordan Lee\r\nTEL;CELL:0436 000 001\r\nEND:VCARD\r\n' >"$intl_contact_dir/jordan.vcf"
+printf 'BEGIN:VCARD\r\nVERSION:2.1\r\nFN:Reverse Jordan\r\nTEL;CELL:+61 436 000 002\r\nEND:VCARD\r\n' >"$intl_contact_dir/reverse.vcf"
 printf 'BEGIN:VCARD\r\nVERSION:2.1\r\nFN:Different Area\r\nTEL;CELL:+1 312 555 1234\r\nEND:VCARD\r\n' >"$intl_contact_dir/area.vcf"
+printf 'BEGIN:VCARD\r\nVERSION:2.1\r\nFN:Conflicting Area\r\nTEL;CELL:+1 (312) 555-1234\r\nEND:VCARD\r\n' >"$intl_contact_dir/conflict.vcf"
 printf 'BEGIN:VCARD\r\nVERSION:2.1\r\nFN:Blank Number\r\nTEL;CELL:\r\nEND:VCARD\r\n' >"$intl_contact_dir/blank.vcf"
 
 # Phone-supplied paths are only accepted from KDE Connect's own directories,
@@ -543,8 +555,12 @@ jq -e 'length == 2 and .[0].threadId == 7 and .[0].unread == true and .[0].names
 jq -e '.[0].attachments[0] == {partId: 42, mimeType: "image/jpeg", thumbnail: "VGh1bWI=", unique: "PART_1.jpeg"} and .[1].attachments == []' <<<"$conversations" >/dev/null
 many_threads="$(OMALINK_TEST_MANY_THREADS=1 XDG_DATA_HOME="$temp_dir/data" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" conversations abc123)"
 jq -e 'length == 200 and .[0].timestamp == 9999 and .[-1].timestamp == 102' <<<"$many_threads" >/dev/null
-many_contact_threads="$(OMALINK_TEST_MANY_THREADS=1 XDG_DATA_HOME="$temp_dir/data-many" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" conversations abc123)"
-jq -e 'length == 200 and .[0].timestamp == 9999 and .[-1].timestamp == 102' <<<"$many_contact_threads" >/dev/null
+many_contact_threads="$(timeout 10s env OMALINK_TEST_MANY_THREADS=1 OMALINK_TEST_MANY_CONTACT_ADDRESSES=1 XDG_DATA_HOME="$temp_dir/data-many" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" conversations abc123)"
+jq -e 'length == 200 and .[0].timestamp == 9999 and .[-1].timestamp == 102
+  and (map(.addresses | length) | max) == 20
+  and (map(.names | length) | max) == 20
+  and (map(select(.threadId == 102))[0].names[0] == "Person 21")
+  and (map(select(.threadId == 300))[0].names[0] == "Person 1981")' <<<"$many_contact_threads" >/dev/null
 many_messages="$(OMALINK_TEST_MANY_MESSAGES=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" messages abc123 7)"
 jq -e 'length == 200 and .[-1].body == "body 300" and .[0].body == "body 101"' <<<"$many_messages" >/dev/null
 thread_messages="$(PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" messages abc123 7)"
@@ -567,7 +583,9 @@ rm -f "$temp_dir/busctl.requested"
 intl_conversations="$(OMALINK_TEST_INTL_CONTACTS=1 XDG_DATA_HOME="$temp_dir/data-intl" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" conversations abc123)"
 jq -e '
   (map(select(.threadId == 7))[0].names == ["Jordan Lee"]) and
+  (map(select(.threadId == 11))[0].names == ["Reverse Jordan"]) and
   (map(select(.threadId == 9))[0].names == ["+12125551234"]) and
+  (map(select(.threadId == 10))[0].names == ["+13125551234"]) and
   (map(select(.threadId == 8))[0].names == ["OKTA"])
 ' <<<"$intl_conversations" >/dev/null
 cold_conversations="$(COLD_CONVERSATION_CACHE=1 XDG_DATA_HOME="$temp_dir/data" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" conversations abc123)"
