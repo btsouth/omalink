@@ -13,6 +13,13 @@ ShellRoot {
     }
   }
   Plugin.Messages { id: messages }
+  // The cached list shows before the slower full read finishes.
+  Timer {
+    id: cachedCheck
+    interval: 150
+    onTriggered: test.check(messages.conversations.length === 1 && messages.conversations[0].preview === "cached"
+                            && !messages.loading, "the cached thread list was not shown first")
+  }
   Timer {
     interval: 700
     running: true
@@ -27,8 +34,10 @@ ShellRoot {
                    "late data repopulated the closed window")
         test.check(Object.keys(messages.messageCache).length === 0, "cache survived close")
         messages.open('{"deviceId":"first"}')
+        cachedCheck.start()
       } else if (test.step === 2) {
         test.check(messages.conversations.length === 1, "conversations did not load")
+        test.check(messages.conversations[0].preview === "fixture", "the full read did not replace the cached list")
         test.check(messages.contacts[0].name === "first", "contacts did not load")
         messages.openThread(messages.conversations[0])
       } else if (test.step === 3) {

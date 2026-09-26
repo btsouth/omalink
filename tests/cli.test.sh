@@ -9,16 +9,6 @@ trap 'rm -rf "$temp_dir"' EXIT
 cat >"$temp_dir/kdeconnect-cli" <<'EOF'
 #!/usr/bin/env bash
 if [[ ${1:-} == --version ]]; then printf 'kdeconnect-cli 26.08.1\n'; exit 0; fi
-if [[ ${1:-} == --list-devices ]]; then
-  [[ -z ${OMALINK_TEST_DISCOVERY_FAIL:-} ]] || exit 1
-  [[ -z ${OMALINK_TEST_DISCOVERY_EMPTY:-} ]] || exit 0
-  if [[ -n ${OMALINK_TEST_EXTRA_DEVICE:-} ]]; then
-    printf '%s\n' 'abc123' 'def456' '../bad'
-  else
-    printf '%s\n' 'abc123' 'def456'
-  fi
-  exit 0
-fi
 if [[ ${1:-} == --device && ${3:-} == --ring ]]; then
   [[ ${2:-} == abc123 ]]
   exit
@@ -47,6 +37,16 @@ cat >"$temp_dir/busctl" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$0.all.log"
 if [[ " $* " == *" GetNameOwner "* ]]; then printf '%s\n' '{"type":"s","data":[":1.99"]}'; exit 0; fi
+if [[ " $* " == *" org.kde.kdeconnect.daemon devices bb false false "* ]]; then
+  [[ -z ${OMALINK_TEST_DISCOVERY_FAIL:-} ]] || exit 1
+  [[ -z ${OMALINK_TEST_DISCOVERY_EMPTY:-} ]] || { printf '%s\n' '{"type":"as","data":[[]]}'; exit 0; }
+  if [[ -n ${OMALINK_TEST_EXTRA_DEVICE:-} ]]; then
+    printf '%s\n' '{"type":"as","data":[["abc123","def456","../bad"]]}'
+  else
+    printf '%s\n' '{"type":"as","data":[["abc123","def456"]]}'
+  fi
+  exit 0
+fi
 if [[ " $* " == *" loadedPlugins "* ]]; then printf '%s\n' '{"type":"as","data":[["kdeconnect_sms","kdeconnect_notifications"]]}'; exit 0; fi
 if [[ " $* " == *" isPluginEnabled "* ]]; then printf '%s\n' '{"type":"b","data":[true]}'; exit 0; fi
 if [[ " $* " == *" requestConversation "* || " $* " == *" replyToConversation "* || " $* " == *" sendReply "* || " $* " == *" requestAttachmentFile "* ]]; then
@@ -120,7 +120,7 @@ case "${*: -1}" in
     fi
     ;;
   isConversation)
-    if [[ " $* " == *"notif.3"* || " $* " == *"notif.4"* || " $* " == *"notif.9"* || " $* " == *"notif.10"* ]]; then
+    if [[ " $* " == *"notif.3"* || " $* " == *"notif.4"* || " $* " == *"notif.9"* || " $* " == *"notif.10"* || " $* " == *"notif.11"* ]]; then
       printf '%s\n' '{"type":"b","data":false}'
     else
       printf '%s\n' '{"type":"b","data":true}'
@@ -549,6 +549,14 @@ rm -f "$temp_dir/busctl.requested"
 cold_conversations="$(COLD_CONVERSATION_CACHE=1 XDG_DATA_HOME="$temp_dir/data" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" conversations abc123)"
 jq -e 'length == 2 and .[0].threadId == 7' <<<"$cold_conversations" >/dev/null
 [[ -e "$temp_dir/busctl.requested" ]]
+# The cached read formats the same list but never asks the phone for threads.
+rm -f "$temp_dir/busctl.requested"
+cached_conversations="$(XDG_DATA_HOME="$temp_dir/data" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" conversations-cached abc123)"
+[[ $cached_conversations == "$conversations" ]]
+[[ ! -e "$temp_dir/busctl.requested" ]]
+if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" conversations-cached ../bad >/dev/null 2>&1; then
+  echo "an invalid device id was accepted for cached conversations" >&2; exit 1
+fi
 attachment_path="$(PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment abc123 42 PART_1.jpeg)"
 image_path="$(OMALINK_TEST_ATTACHMENT="$art_dir/art.jpg" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" attachment abc123 42 PART_1.jpeg image)"
 [[ $image_path == "$art_dir/art.jpg" ]]
@@ -754,6 +762,20 @@ fi
 quiet_out="$(XDG_RUNTIME_DIR="$temp_dir" XDG_CONFIG_HOME="$temp_dir/xdg" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --popups off watch)"
 [[ $quiet_out == "$watch_out" ]]
 [[ ! -s "$temp_dir/notify-send.log" ]]
+# Sender popups name a text's sender, escaped, and still never show the
+# message. Other apps keep the app-name popup.
+sender_out="$(XDG_RUNTIME_DIR="$temp_dir" XDG_CONFIG_HOME="$temp_dir/xdg" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --popups sender watch)"
+[[ $sender_out == "$watch_out" ]]
+[[ "$(grep -c '^notify ' "$temp_dir/notify-send.log")" == 2 ]]
+grep -q 'New message from &lt;img src="http://192.168.1.1/x.png"&gt;Hi Click to read it in OmaLink' "$temp_dir/notify-send.log"
+grep -q 'Authenticator Open OmaLink to read it' "$temp_dir/notify-send.log"
+if grep -q 'Phone text\|<img' "$temp_dir/notify-send.log"; then
+  echo "phone content reached a sender popup" >&2; exit 1
+fi
+: >"$temp_dir/notify-send.log"
+if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --popups names status >/dev/null 2>&1; then
+  echo "an unknown popup mode was accepted" >&2; exit 1
+fi
 # A predictable pid is no longer read, and a lock symlink is refused.
 sleep 60 &
 bystander=$!

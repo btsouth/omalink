@@ -14,8 +14,9 @@ from an already-running BlueFerry backend.
 - SMS/MMS/RCS and authenticator notifications with dismissal on the phone
 - Notification sources you can tune, and popups you can turn off while keeping
   the list in the panel
-- Notification popups that open the OmaLink panel on click, with message
-  contents always hidden in popups (read them in the panel instead)
+- Notification popups that open the OmaLink panel on click. Texts and chats
+  name the sender ("New message from Rebecca"); message contents are never
+  shown in popups (read them in the panel instead)
 - Unread text messages readable directly in the panel, even when the phone
   redacts notification contents; click one to open its conversation
 - Clear unread messages from the panel (KDE Connect cannot mark conversations
@@ -211,9 +212,12 @@ control**.
 
 ## Notification popups
 
-OmaLink's popups show the app name and an invitation to open the panel. They
-never include notification titles or bodies, including authenticator codes.
-Clicking a popup opens the OmaLink panel. At most four popup helpers run at
+OmaLink's popups show the app name and an invitation to open the panel. A text
+or chat instead names who it is from, for example "New message from Rebecca",
+using the notification's title (a group chat shows the group name). Popups never
+include notification bodies, and other apps' titles, such as authenticator
+prompts, stay out of them. Setting **Panel message content** to Hide also keeps
+text popups to the app name. Clicking a popup opens the OmaLink panel. At most four popup helpers run at
 once; notifications skipped during a burst remain available in the panel.
 
 KDE Connect may also show its own popups. To avoid duplicates, turn those off
