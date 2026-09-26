@@ -187,7 +187,9 @@ Item {
     cachedConversationProcess.running = true
   }
 
-  function applyConversationList(text) {
+  // The cached list can lack a thread that only just arrived, so a thread
+  // waiting to open stays pending until the full read if the cache misses it.
+  function applyConversationList(text, complete) {
     var fetched = Model.parseConversations(text)
     historyConversations = fetched
     updateSendOperations(SendState.bindThreads(sendOperations, fetched))
@@ -195,6 +197,7 @@ Item {
       var target = Model.findConversationByThreadId(conversations, pendingOpenThreadId)
       if (!target && pendingOpenTitle !== "")
         target = Model.findConversationByTitle(conversations, pendingOpenTitle)
+      if (!target && !complete) return
       pendingOpenThreadId = ""
       pendingOpenTitle = ""
       if (target && !selectedConversation && !composing) openThread(target)
@@ -599,7 +602,7 @@ Item {
         if (!conversationProcess.current) return
         cachedConversationProcess.running = false
         root.conversationsAppliedGeneration = root.generation
-        root.applyConversationList(text)
+        root.applyConversationList(text, true)
       }
     }
     stderr: StdioCollector {
@@ -623,7 +626,7 @@ Item {
         if (!cachedConversationProcess.current || root.conversationsAppliedGeneration === root.generation) return
         var fetched = Model.parseConversations(text)
         if (fetched.length === 0) return
-        root.applyConversationList(text)
+        root.applyConversationList(text, false)
         if (!root.selectedConversation) root.loading = false
       }
     }

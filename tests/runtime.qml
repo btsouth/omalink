@@ -62,6 +62,12 @@ ShellRoot {
         test.check(messages.conversations.length === 1 && messages.conversations[0].names[0] === "second",
                    "immediate reopen left conversations missing or stale")
         messages.close()
+        // A thread the cache does not have yet still opens once the full read has it.
+        messages.open('{"deviceId":"late","threadId":8}')
+      } else if (test.step === 7) {
+        test.check(messages.selectedConversation && String(messages.selectedConversation.threadId) === "8",
+                   "a thread missing from the cache was not opened after the full read")
+        messages.close()
         console.log("omalink runtime tests passed")
         Qt.quit()
       }

@@ -51,9 +51,6 @@ Panel {
   property string notifReplyTitle: ""
   property string notifReplyDeviceId: ""
   property var unreadRaw: []
-  // When the read behind unreadRaw started. A slower read that started
-  // earlier never replaces a newer list.
-  property double unreadStartedAt: 0
   property var seenMap: ({})
   property int selectionGeneration: 0
   readonly property string activePhoneId: phone.selectedDeviceId
@@ -86,7 +83,6 @@ Panel {
   function invalidatePhoneReads() {
     selectionGeneration++
     unreadRaw = []
-    unreadStartedAt = 0
     seenMap = ({})
     if (opened && messagesReady) { refreshSeen(); refreshUnreadCached(); refreshUnread() }
   }
@@ -181,7 +177,6 @@ Panel {
     if (!messagesReady || unreadProcess.running) return
     unreadProcess.deviceId = activePhoneId
     unreadProcess.generation = selectionGeneration
-    unreadProcess.startedAt = Date.now()
     unreadProcess.command = [phone.helperPath, "conversations", activePhoneId]
     unreadProcess.running = true
   }
@@ -195,16 +190,15 @@ Panel {
     unreadCachedQueued = false
     unreadCachedProcess.deviceId = activePhoneId
     unreadCachedProcess.generation = selectionGeneration
-    unreadCachedProcess.startedAt = Date.now()
     unreadCachedProcess.command = [phone.helperPath, "conversations-cached", activePhoneId]
     unreadCachedProcess.running = true
   }
 
   property bool unreadCachedQueued: false
 
-  function applyUnread(text, startedAt) {
-    if (startedAt < unreadStartedAt) return
-    unreadStartedAt = startedAt
+  // Both reads end by reading the daemon's cache, so whichever finishes last
+  // has the newest list.
+  function applyUnread(text) {
     unreadRaw = Model.unreadConversations(Model.parseConversations(text))
   }
 
@@ -265,12 +259,11 @@ Panel {
     id: unreadProcess
     property string deviceId: ""
     property int generation: -1
-    property double startedAt: 0
     readonly property bool current: root.messagesReady && deviceId === root.activePhoneId && generation === root.selectionGeneration
     onExited: if (!current && root.opened) Qt.callLater(root.refreshUnread)
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: if (unreadProcess.current) root.applyUnread(text, unreadProcess.startedAt)
+      onStreamFinished: if (unreadProcess.current) root.applyUnread(text)
     }
   }
 
@@ -278,13 +271,13 @@ Panel {
     id: unreadCachedProcess
     property string deviceId: ""
     property int generation: -1
-    property double startedAt: 0
     readonly property bool current: root.messagesReady && deviceId === root.activePhoneId && generation === root.selectionGeneration
     onExited: if (!current || root.unreadCachedQueued) Qt.callLater(root.refreshUnreadCached)
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: if (unreadCachedProcess.current && String(text || "").trim() !== "")
-        root.applyUnread(text, unreadCachedProcess.startedAt)
+      // A cold cache is empty, not proof that nothing is unread.
+      onStreamFinished: if (unreadCachedProcess.current && Model.parseConversations(text).length > 0)
+        root.applyUnread(text)
     }
   }
 
