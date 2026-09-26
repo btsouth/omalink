@@ -178,6 +178,14 @@ class SessionTransport(unittest.TestCase):
         value = request(); value['body'] = 'https://example.org/private?q=secret'
         self.assertEqual(self.submit(value)[0]['state'], 'accepted')
         self.assertEqual(json.loads(self.control.Calls())[0][1], 'url')
+    def test_url_with_surrounding_text_stays_exact_text(self):
+        for body in ['https://example.org\nA second line', 'https://example.org trailing text',
+                     'https://example.org\n', ' https://example.org', 'https://example.org\u00a0']:
+            self.control.Mode('ok')
+            value = request(); value['body'] = body
+            self.assertEqual(self.submit(value)[0]['state'], 'accepted')
+            self.assertEqual(json.loads(self.control.Calls()), [['share', 'text', body]])
+
     def test_preflight_prevents_dispatch(self):
         for mode in ['isPaired', 'isReachable', 'disabled', 'invalid_property']:
             self.control.Mode(mode)

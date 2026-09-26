@@ -134,7 +134,7 @@ class Transport:
         empty = self.dbus.Array([], signature='v')
         body = request['body']
         if operation == 'share':
-            method = 'shareUrl' if re.match(r'^https?://', body) else 'shareText'
+            method = 'shareUrl' if re.fullmatch(r'https?://[^\s]+', body) else 'shareText'
             self.call(owner, path + '/share', DEVICE_IFACE + '.share', method, 's', (body,), effect=True)
         elif operation == 'sms':
             # QVariantList of ConversationAddress structs, each containing one
