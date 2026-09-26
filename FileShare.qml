@@ -26,7 +26,6 @@ Item {
   property string statusDestinationName: ""
   property int selectionGeneration: 0
   property var pickerRoute: null
-  property var dropRoute: null
   property bool requestActive: false
   readonly property bool sending: requestActive || sendProcess.running
   readonly property bool pickerVisible: picker.visible
@@ -43,7 +42,6 @@ Item {
     destinationId = ""
     destinationName = ""
     pickerRoute = null
-    dropRoute = null
     picker.close()
   }
   function route() {
@@ -76,22 +74,6 @@ Item {
   function removeFile(index) {
     if (sending || index < 0 || index >= selectedPaths.length) return
     selectedPaths = selectedPaths.filter(function(_, position) { return position !== index })
-  }
-  function beginDrop(drag) {
-    dropRoute = route()
-    drag.accepted = drag.hasUrls && !!(drag.supportedActions & Qt.CopyAction) && dropRoute !== null
-    if (drag.accepted) drag.action = Qt.CopyAction
-    else dropRoute = null
-  }
-  function finishDrop(drop) {
-    // Selecting files is never a move. A Move acknowledgement could tell the
-    // drag source to remove originals before any transfer has been requested.
-    drop.accepted = false
-    if (!(drop.supportedActions & Qt.CopyAction)) { dropRoute = null; return }
-    var urls = []
-    for (var i = 0; i < drop.urls.length; i++) urls.push(drop.urls[i].toString())
-    if (selectUrls(urls, dropRoute)) drop.accept(Qt.CopyAction)
-    dropRoute = null
   }
   function submit() {
     if (sending || !canShare || !Files.validDeviceId(destinationId) || destinationId !== deviceId || selectedPaths.length < 1 || selectedPaths.length > 32) return false
@@ -128,7 +110,7 @@ Item {
     property int requestCount: 0
     property string destinationName: ""
     property string response: ""
-    stdout: StdioCollector { onStreamFinished: sendProcess.response = text }
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: sendProcess.response = text }
     onExited: function(exitCode) {
       root.requestActive = false
       var outcome = Files.result(response, exitCode, requestCount)
@@ -137,13 +119,6 @@ Item {
       root.statusDestinationName = destinationName
       root.requestFinished(outcome.state, destinationName)
     }
-  }
-  DropArea {
-    anchors.fill: parent
-    enabled: root.canShare && !root.sending
-    onEntered: function(drag) { root.beginDrop(drag) }
-    onExited: root.dropRoute = null
-    onDropped: function(drop) { root.finishDrop(drop) }
   }
   ColumnLayout {
     id: content
@@ -155,15 +130,17 @@ Item {
       textFormat: Text.PlainText
       color: root.foreground
       font.family: root.fontFamily
+      font.pixelSize: Style.font.bodySmall
       font.bold: true
     }
     Text {
       Layout.fillWidth: true
       text: root.destinationId !== "" && root.selectedPaths.length ? qsTr("To %1 · %2 files").arg(root.destinationName).arg(root.selectedPaths.length)
-        : root.canShare ? qsTr("Choose or drop files for %1").arg(String(root.deviceName || root.deviceId).slice(0, 256)) : qsTr("Connect a phone with file sharing enabled")
+        : root.canShare ? qsTr("Choose files for %1").arg(String(root.deviceName || root.deviceId).slice(0, 256)) : qsTr("Connect a phone with file sharing enabled")
       textFormat: Text.PlainText
       color: root.foreground
       font.family: root.fontFamily
+      font.pixelSize: Style.font.bodySmall
       wrapMode: Text.Wrap
     }
     Controls.ScrollView {
@@ -188,6 +165,7 @@ Item {
               textFormat: Text.PlainText
               color: root.foreground
               font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
               elide: Text.ElideMiddle
             }
             Button {
@@ -230,6 +208,7 @@ Item {
       textFormat: Text.PlainText
       color: root.foreground
       font.family: root.fontFamily
+      font.pixelSize: Style.font.bodySmall
       wrapMode: Text.Wrap
       Accessible.role: Accessible.StaticText
       Accessible.name: text
@@ -241,6 +220,7 @@ Item {
       color: root.foreground
       opacity: 0.7
       font.family: root.fontFamily
+      font.pixelSize: Style.font.bodySmall
       wrapMode: Text.Wrap
     }
   }

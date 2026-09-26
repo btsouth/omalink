@@ -2,6 +2,10 @@
 
 ## 0.3.0 - Unreleased
 
+- Add explicit multi-file selection and destination preview, with one bounded
+  request per submission and no automatic retries. Report accepted or unknown
+  outcomes without claiming delivery.
+
 - Show known paired, offline and unpaired devices with capability-aware setup.
   Disable unavailable tasks, keep null status values unknown, and show freshness.
 - Add bounded, redacted connection diagnostics without collecting phone content.

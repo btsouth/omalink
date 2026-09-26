@@ -241,7 +241,7 @@ or represented as definitely unsent.
 
 ### PR 4: complete KDE file transfer
 
-- [ ] Probe the supported file/share interface, including `shareUrls`, against
+- [x] Probe the supported file/share interface, including `shareUrls`, against
   the tested desktop release. Inventory which states and cancellation callbacks
   it exposes before drawing a progress bar.
 - [ ] Add explicit destination plus multi-file picker/drop support. Validate
@@ -254,6 +254,24 @@ or represented as definitely unsent.
   and imply OmaLink received it. Refuse unsolicited auto-open of received files.
 - [ ] Handle low disk, same names, Unicode, partial transfer and disconnect.
   Retain no source/recipient history beyond a documented bounded policy.
+
+Outgoing-file implementation: `bin/omalink-files` validates the complete batch
+before a single owner-bound `shareUrls` call. The UI offers a native multi-file
+picker, destination preview, per-file removal and explicit submission. Limits
+are 32 regular readable files and 8 GiB total. Timeout/nonzero dispatch remains
+unconfirmed; preflight rejection is a definite failure. No outgoing completion,
+aggregate progress or cancellation is exposed by KDE Connect 26.08.1's D-Bus
+share interface, so the UI cannot truthfully show those states. Received activity,
+low-disk receiver behavior, physical transfer/disconnect and conflict acceptance
+remain separate work, not completed by the outgoing implementation.
+
+Validation covers hostile/local URL input, Unicode, file/count/size bounds,
+stale destination selection, rapid repeated submission,
+partial/malformed results, owner restart and timeouts. Integrated native picker
+acceptance and one explicit synthetic batch submission pass in omabox. Real
+Android/iPhone receipt remains unverified. External file-manager drops did not
+reach the bar in the isolated desktop, so drag-and-drop is deferred and is not
+advertised or enabled in this picker slice.
 
 ### PR 5: quick share and clipboard
 

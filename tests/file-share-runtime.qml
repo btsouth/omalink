@@ -25,6 +25,7 @@ ShellRoot {
     }
   }
   Timer {
+    id: testTimer
     interval: 70
     running: true
     repeat: true
@@ -32,24 +33,6 @@ ShellRoot {
       test.ticks++
       test.check(test.ticks < 80, "step timeout " + test.step)
       if (test.step === 0) {
-        var moveOnly = {hasUrls:true, supportedActions:Qt.MoveAction, accepted:true, action:Qt.MoveAction}
-        files.beginDrop(moveOnly)
-        test.check(!moveOnly.accepted, "move-only drag accepted")
-        var copy = {hasUrls:true, supportedActions:Qt.CopyAction | Qt.MoveAction, accepted:false, action:Qt.MoveAction}
-        files.beginDrop(copy)
-        test.check(copy.accepted && copy.action === Qt.CopyAction, "move proposal not overridden")
-        var drop = {supportedActions:Qt.CopyAction | Qt.MoveAction, urls:["file:///tmp/a"], accepted:false, chosen:Qt.IgnoreAction,
-          accept:function(action) { this.accepted = true; this.chosen = action }}
-        files.finishDrop(drop)
-        test.check(drop.accepted && drop.chosen === Qt.CopyAction && !files.sending, "drop did not remain a copy-only draft")
-        files.invalidateSelection()
-        files.beginDrop(copy)
-        files.deviceId = "changedDuringDrag"
-        drop.accepted = false
-        drop.chosen = Qt.IgnoreAction
-        files.finishDrop(drop)
-        test.check(!drop.accepted && files.selectedPaths.length === 0, "stale drag routed to new phone")
-        files.deviceId = "old"
         var oldRoute = files.route()
         files.deviceId = "new"
         files.deviceName = "Galaxy"
@@ -92,6 +75,7 @@ ShellRoot {
         test.check(files.pickerRoute !== null, "picker route missing")
         files.deviceId = "other"
         test.check(files.pickerRoute === null && !files.pickerVisible, "picker survived phone switch")
+        testTimer.running = false
         console.log("omalink file share runtime tests passed")
         Qt.quit()
       }
