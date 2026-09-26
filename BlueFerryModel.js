@@ -2,6 +2,20 @@
 function endpoint() {
   return {provider:"blueferry", instanceId:"local", deviceId:"local-history", accountId:null}
 }
+function enabledInBar(config) {
+  if (!record(config) || !record(config.layout)) return false
+  var found = false
+  for (var section of ["left", "center", "right"]) {
+    var rows = config.layout[section]
+    if (!Array.isArray(rows)) continue
+    for (var row of rows) {
+      if (!record(row) || row.id !== "omalink.phone") continue
+      if (row.blueFerryHistory !== "On") return false
+      found = true
+    }
+  }
+  return found
+}
 function record(value) { return value !== null && typeof value === "object" && !Array.isArray(value) }
 function integer(value) {
   return typeof value === "number" && isFinite(value) && value >= 0
@@ -126,4 +140,4 @@ function result(transport, operation, expectedOwner) {
     canReadHistory:value.canReadHistory, history:{coverage:"observed-only",truncated:true}, items:items}
 }
 if (typeof module !== "undefined" && module.exports)
-  module.exports = {endpoint:endpoint, validEndpoint:validEndpoint, errorText:errorText, result:result}
+  module.exports = {endpoint:endpoint, enabledInBar:enabledInBar, validEndpoint:validEndpoint, errorText:errorText, result:result}

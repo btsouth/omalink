@@ -301,8 +301,9 @@ drafts, cross-phone thread collisions and delayed results. See the
 
 This is not the completed provider extraction. Generic snapshot/owner checks are
 pure contract fixtures; KDE reads do not yet subscribe to unique owner changes.
-BlueFerry and Blip transports, full endpoint selection and migrations remain
-future work. No iPhone messaging capability is enabled by this foundation.
+Full endpoint selection and migrations remain future work. BlueFerry now has
+the separate opt-in read-only history slice described below; sending and Blip
+remain unimplemented.
 
 - [ ] Keep the existing KDE implementation behind the documented contract.
   Implement capability and connection normalization, cancellation and owner
@@ -316,6 +317,23 @@ future work. No iPhone messaging capability is enabled by this foundation.
 ## Phase 3: direct iPhone messaging
 
 ### PR 7: BlueFerry read-only adapter and setup
+
+Implemented initial slice: opt-in status/setup card, bounded local conversations
+and cached contacts in Messages, explicit read-only controls, locked/offline
+storage states, owner-checked private reads and no service activation. Turning
+the option off cancels reads and clears the open view. Backend errors and removed
+threads invalidate retained view content. Thirteen mock D-Bus tests and actual
+QML tests cover these boundaries; physical iPhone acceptance remains open.
+
+The current upstream API exposes no stable physical-phone identity. This view
+therefore represents `blueferry/local/local-history`, not a selected physical
+phone or messaging account. Sending remains blocked pending a safe destination
+identity contract. History comes from exact opaque keys in `ListThreads`, which
+already includes message tails. There is no fabricated archive pagination.
+
+This initial slice polls while visible. Content-free event subscriptions, broader
+provider extraction and real iPhone/controller acceptance remain separate work.
+See [setup](blueferry-setup.md) and [adapter contract](blueferry-adapter.md).
 
 Target the researched BlueFerry generation 2 API at
 `71749673b862c8f103d2353aeddd1fb54d185cff`, subject to a fresh check before coding.

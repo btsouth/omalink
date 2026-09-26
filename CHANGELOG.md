@@ -2,6 +2,16 @@
 
 ## 0.3.0 - Unreleased
 
+- Add opt-in experimental BlueFerry local history and cached contact viewing.
+  Require API 2, an existing backend owner and readable storage. Keep this route
+  separate from KDE Connect, with no sending, read acknowledgements or setup
+  changes. Cancel reads and clear content when disabled or invalidated.
+- Send message and shared text through private stdin and direct D-Bus calls.
+  Require python-dbus; remove legacy text-bearing command arguments and preserve
+  exact Unicode/whitespace with explicit accepted, not-submitted and unknown states.
+- Isolate message routes and caches by provider identity and reject malformed
+  window requests before changing drafts. Add GitHub model and static validation.
+
 - Add explicit multi-file selection and destination preview, with one bounded
   request per submission and no automatic retries. Report accepted or unknown
   outcomes without claiming delivery.

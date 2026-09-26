@@ -1,10 +1,11 @@
 # OmaLink
 
-Your Android phone, native to Omarchy.
+Your phone, native to Omarchy.
 
 OmaLink is a themed Omarchy Shell plugin powered by KDE Connect. It puts the
 phone controls and information that matter directly in the bar, without a web
-account or cloud relay.
+account or cloud relay. An optional experimental view reads local iPhone history
+from an already-running BlueFerry backend.
 
 ## Features
 
@@ -34,6 +35,20 @@ account or cloud relay.
   play/pause, previous/next, seek, and volume
 - Native colors and typography across Omarchy themes
 - Memory-only message cache that is cleared when the message window closes
+
+## Experimental iPhone history
+
+Enable **Experimental BlueFerry history** in the widget settings after installing,
+pairing and starting BlueFerry separately. The panel shows connection and storage
+state, then opens bounded conversations and cached contacts in OmaLink. Viewing
+history does not send messages or mark them read. Turning the option off closes
+the view and clears its cached contents.
+
+This is BlueFerry's local observed history, not a complete iPhone archive or a
+connection associated with the selected KDE Connect phone. Sending, attachments,
+phone setup and storage changes remain unavailable in this integration. It is
+experimental and has not passed physical iPhone acceptance. See the
+[setup, retention and compatibility guide](docs/blueferry-setup.md).
 
 ## Requirements
 
@@ -284,10 +299,12 @@ The private D-Bus fixture also needs the development-only `python-gobject` packa
 node tests/model.test.js
 node tests/provider-model.test.js
 node tests/private-text.test.js
+node tests/blueferry-model.test.js
 node tests/send-state.test.js
 node tests/capabilities.test.js
 node tests/file-share-model.test.js
 node tests/private-text.test.js
+node tests/blueferry-model.test.js
 bash tests/qml.test.sh
 shellcheck -S warning bin/omalink bin/omalink-files tests/*.sh
 omabox run -- omarchy plugin validate .
@@ -300,6 +317,10 @@ omabox run -- bash tests/runtime.test.sh
 omabox run -- bash tests/selection-runtime.test.sh
 omabox run -- bash tests/send-runtime.test.sh
 omabox run -- bash tests/provider-runtime.test.sh
+omabox run -- bash tests/provider-request-runtime.test.sh
+omabox run -- bash tests/blueferry-runtime.test.sh
+omabox run -- bash tests/blueferry-service-runtime.test.sh
+omabox run -- /usr/bin/python3 tests/blueferry.test.py
 omabox run -- bash tests/private-request-runtime.test.sh
 omabox run -- bash tests/file-share-runtime.test.sh
 ```

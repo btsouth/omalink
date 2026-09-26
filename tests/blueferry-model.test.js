@@ -55,3 +55,8 @@ assert.equal(JSON.stringify(clean).includes("secret"),false)
 clean.items[0].names[0]="Changed"
 assert.equal(thread.names[0],"Family")
 console.log("BlueFerry model tests passed")
+
+assert.equal(model.enabledInBar(null), false)
+assert.equal(model.enabledInBar({layout:{right:[{id:"omalink.phone",blueFerryHistory:"Off"}]}}), false)
+assert.equal(model.enabledInBar({layout:{right:[{id:"omalink.phone",blueFerryHistory:"On"}]}}), true)
+assert.equal(model.enabledInBar({layout:{right:[{id:"other",blueFerryHistory:"On"}]}}), false)

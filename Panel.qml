@@ -37,6 +37,14 @@ Panel {
   property bool showDiagnostics: false
   property bool showCapabilities: false
   property bool showFiles: false
+  readonly property bool blueFerryEnabled: String(settings.blueFerryHistory || "Off") === "On"
+
+  function openBlueFerryHistory(endpoint, backendOwner) {
+    if (!blueFerryEnabled || !blueFerry.canReadHistory || backendOwner !== blueFerry.backendOwner) return
+    root.close()
+    bar.shell.summon("omalink.phone", JSON.stringify({endpoint:endpoint, backendOwner:backendOwner,
+      deviceName:"BlueFerry local history"}))
+  }
   onMessagesReadyChanged: invalidatePhoneReads()
   onActivePhoneIdChanged: {
     shareDeviceId = ""
@@ -172,6 +180,12 @@ Panel {
     onSelectionSuggested: function(deviceId, deviceName) { root.persistSelection(deviceId, deviceName) }
   }
 
+  BlueFerryService {
+    id: blueFerry
+    enabled: root.blueFerryEnabled
+    panelOpen: root.opened
+  }
+
   BarIconButton {
     id: button
     anchors.fill: parent
@@ -241,10 +255,17 @@ Panel {
           }
         }
   
+        BlueFerryCard {
+          Layout.fillWidth: true
+          visible: root.blueFerryEnabled
+          service: blueFerry
+          onOpenHistory: function(endpoint, backendOwner) { root.openBlueFerryHistory(endpoint, backendOwner) }
+        }
+
         Text {
           visible: phone.statusReady && !phone.installed && !phone.statusFailed
           Layout.fillWidth: true
-          text: "Install kdeconnect and jq, then open pairing to connect your phone."
+          text: "Install kdeconnect, jq and python-dbus, then open pairing to connect your phone."
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall
@@ -254,7 +275,7 @@ Panel {
         Text {
           visible: phone.installed && !phone.statusFailed && phone.devices.length === 0 && root.activePhoneId === ""
           Layout.fillWidth: true
-          text: qsTr("Open KDE Connect on your Android phone or iPhone, then open pairing. Keep the iPhone app open during setup. Messaging is currently available through Android KDE Connect only.")
+          text: qsTr("Open KDE Connect on your Android phone or iPhone, then open pairing. Keep the iPhone app open during setup. KDE Connect messaging requires Android. Optional BlueFerry history is available separately in widget settings.")
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall

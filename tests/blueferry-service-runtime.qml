@@ -1,5 +1,7 @@
 import QtQuick
 import Quickshell
+import QtQuick.Layouts
+import qs.Commons
 import "." as Plugin
 ShellRoot {
   id: test
@@ -10,7 +12,18 @@ ShellRoot {
   }
   function next() { step++;ticks=0 }
   Plugin.BlueFerryService { id: service; panelOpen:true }
-  Plugin.BlueFerryCard { service:service; width:360 }
+  PanelWindow {
+    visible: Quickshell.env("OMALINK_PREVIEW") === "card"
+    width: 380
+    height: 450
+    color: Color.popups.background
+    ColumnLayout {
+      anchors.fill: parent
+      anchors.margins: 16
+      Plugin.BlueFerryCard { service:service; Layout.fillWidth:true }
+      Item { Layout.fillHeight:true }
+    }
+  }
   Timer {
     interval:80; running:true; repeat:true
     onTriggered: {
@@ -22,6 +35,7 @@ ShellRoot {
         test.next()
       } else if (test.step===1 && service.canReadHistory) {
         test.check(service.backendOwner===":1.10" && service.snapshot.connection==="ready","first route metadata wrong")
+        if (Quickshell.env("OMALINK_PREVIEW") === "card") { stop(); return }
         service.enabled=false
         test.check(service.snapshot===null && !service.canReadHistory,"disable retained snapshot")
         service.panelOpen=false

@@ -6,7 +6,10 @@
   "author": "OmaLink contributors",
   "license": "MIT",
   "description": "Native Android phone integration for Omarchy, powered by KDE Connect.",
-  "kinds": ["bar-widget", "overlay"],
+  "kinds": [
+    "bar-widget",
+    "overlay"
+  ],
   "entryPoints": {
     "barWidget": "Panel.qml",
     "overlay": "Messages.qml"
@@ -21,7 +24,8 @@
       "refreshIntervalSec": 15,
       "notifyApps": "Messages, Messaging, Authenticator, WhatsApp, MMS",
       "notifyPopups": "On",
-      "mediaControls": "On"
+      "mediaControls": "On",
+      "blueFerryHistory": "Off"
     },
     "schema": [
       {
@@ -61,6 +65,17 @@
         ],
         "defaultValue": "On",
         "description": "Show the phone's active media player in the panel. Off hides the section entirely."
+      },
+      {
+        "key": "blueFerryHistory",
+        "type": "enum",
+        "label": "Experimental BlueFerry history",
+        "options": [
+          "On",
+          "Off"
+        ],
+        "defaultValue": "Off",
+        "description": "View local iPhone history and cached contacts from an already running BlueFerry backend. Read-only; does not install, start or configure BlueFerry."
       }
     ]
   }

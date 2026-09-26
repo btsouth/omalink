@@ -2,9 +2,12 @@
 
 `ProviderModel.js` is a pure JavaScript boundary for endpoint identity and small
 metadata snapshots. QML and Node use the same implementation. It does not
-activate a backend, send messages, store history or provide iPhone integration.
+activate a backend, send messages or store history. The optional read-only
+BlueFerry adapter uses a separate validated result contract.
 BlueFerry and Blip are recognized namespaces for adapter development and tests;
-recognizing a namespace does not make that provider available in the UI.
+recognizing a namespace does not itself make that provider available in the UI.
+BlueFerry local history requires the separate explicit widget opt-in and an
+existing API-compatible backend. Blip remains unimplemented.
 
 The existing KDE helper still produces its existing status schema. This contract
 is a separate boundary to adopt when adding adapters. Do not feed a KDE status
@@ -161,3 +164,12 @@ Run `bash tests/provider-runtime.test.sh` only inside omabox. It exercises the
 actual Messages component with synthetic KDE routes, rejected provider summons,
 namespaced history and delayed responses. Existing selection and send runtime
 tests also cover the integration. No real phone or iPhone backend is contacted.
+
+## Implemented read-only BlueFerry route
+
+`messageEndpointFromPayload` accepts the existing local KDE routes and the exact
+BlueFerry `local-history` endpoint with an explicit unique backend owner. This
+backend route is not a stable physical-phone identity. Messages additionally
+checks the shell's current widget opt-in and closes/clears the view when it is
+disabled. This route cannot reach KDE mutations. See the
+[adapter contract](blueferry-adapter.md) for read bounds and owner/storage checks.

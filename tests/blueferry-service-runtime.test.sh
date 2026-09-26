@@ -21,6 +21,7 @@ print(json.dumps({"version":1,"ok":True,"operation":"status","endpoint":{"provid
 PY
 chmod +x "$work/bin/omalink-blueferry"
 cp "$project_dir/tests/blueferry-service-runtime.qml" "$work/shell.qml"
+if [[ ${OMALINK_PREVIEW:-} == card ]]; then qs -p "$work"; exit; fi
 timeout --kill-after=2s 20s qs -p "$work" >"$work/log" 2>&1 || { cat "$work/log";exit 1; }
 cat "$work/log"
 grep -q 'BlueFerry service runtime tests passed' "$work/log"
