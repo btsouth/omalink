@@ -2,6 +2,17 @@
 
 ## 0.3.0 - Unreleased
 
+- Name the sender in text and chat popups ("New message from Rebecca") without
+  showing the message. Hidden panel content keeps popups to the app name.
+- Refresh phone status in about a quarter second instead of over two: device
+  discovery now asks KDE Connect directly rather than through
+  `kdeconnect-cli --list-devices`, which always sleeps two seconds.
+- Run a refresh requested during another one as soon as it finishes, so a new
+  notification reaches the panel right away instead of at the next timer tick.
+- Show KDE Connect's cached thread list at once in the panel and the Messages
+  window, then update it from the phone. The panel keeps unread messages
+  current while closed whenever a notification arrives.
+
 - Add per-app notification rules for the selected phone. Allow, Mute or Default
   apps seen in the phone's current notifications, matched by validated Android
   package or clearly labeled name-only fallback. Status, popups and Clear all

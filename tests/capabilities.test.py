@@ -18,8 +18,6 @@ root = Path(os.environ['CAP_TEST_ROOT'])
 mode = os.environ.get('CAP_MODE', '')
 if '--version' in sys.argv:
     print('kdeconnect-cli 26.08.1' if mode != 'bad-version' else 'kdeconnect-cli 26.08.1\\nPRIVATE-NAME')
-elif '--list-devices' in sys.argv:
-    print('known1\\noffline2\\nunpaired3' if mode != 'many' else '\\n'.join('device' + str(i) for i in range(12)))
 elif '--send-sms' in sys.argv:
     with (root / 'sent').open('a') as stream: stream.write('sms\\n')
 else: sys.exit(1)
@@ -44,6 +42,10 @@ assert service == ':1.99', ('not owner bound', args)
 path = args[args.index('--') + 2]
 device = path.rsplit('/', 1)[-1]
 prop = args[-1]
+if args[-4:] == ['devices', 'bb', 'false', 'false']:
+    ids = ['known1', 'offline2', 'unpaired3'] if mode != 'many' else ['device' + str(i) for i in range(12)]
+    print(json.dumps(dict(type='as', data=[ids])))
+    sys.exit(0)
 plugins = ['kdeconnect_sms','kdeconnect_notifications','kdeconnect_contacts','kdeconnect_share',
            'kdeconnect_clipboard','kdeconnect_findmyphone','kdeconnect_mprisremote','kdeconnect_battery',
            'kdeconnect_sftp','kdeconnect_connectivity_report']

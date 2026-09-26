@@ -58,6 +58,8 @@ Item {
   property string pendingOpenTitle: ""
   property string pendingOpenThreadId: ""
   property bool loading: false
+  // The generation whose thread list came from a full conversations read.
+  property int conversationsAppliedGeneration: -1
   property string error: ""
   property var attachmentPaths: ({})
   property string attachmentFetchUnique: ""
@@ -96,6 +98,7 @@ Item {
     searchText = ""
     opened = true
     refreshContacts()
+    refreshCachedConversations()
     refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
     return true
@@ -112,6 +115,7 @@ Item {
     newMessageProcess.forgetPayload()
     replyProcess.forgetPayload()
     conversationProcess.running = false
+    cachedConversationProcess.running = false
     contactProcess.running = false
     threadProcess.running = false
     threadProcess.result = null
@@ -172,6 +176,32 @@ Item {
     conversationProcess.command = [helperPath, "conversations", deviceId]
     conversationProcess.generation = generation
     conversationProcess.running = true
+  }
+
+  // Shows KDE Connect's cached thread list right away. The full read, which
+  // asks the phone for anything newer, replaces it when it finishes.
+  function refreshCachedConversations() {
+    if (!opened || deviceId === "" || readOnlyProvider || cachedConversationProcess.running || providerInvalidated) return
+    cachedConversationProcess.command = [helperPath, "conversations-cached", deviceId]
+    cachedConversationProcess.generation = generation
+    cachedConversationProcess.running = true
+  }
+
+  // The cached list can lack a thread that only just arrived, so a thread
+  // waiting to open stays pending until the full read if the cache misses it.
+  function applyConversationList(text, complete) {
+    var fetched = Model.parseConversations(text)
+    historyConversations = fetched
+    updateSendOperations(SendState.bindThreads(sendOperations, fetched))
+    if (pendingOpenThreadId !== "" || pendingOpenTitle !== "") {
+      var target = Model.findConversationByThreadId(conversations, pendingOpenThreadId)
+      if (!target && pendingOpenTitle !== "")
+        target = Model.findConversationByTitle(conversations, pendingOpenTitle)
+      if (!target && !complete) return
+      pendingOpenThreadId = ""
+      pendingOpenTitle = ""
+      if (target && !selectedConversation && !composing) openThread(target)
+    }
   }
 
   function refreshContacts() {
@@ -570,17 +600,9 @@ Item {
     stdout: SplitParser {
       onRead: function(text) {
         if (!conversationProcess.current) return
-        var fetched = Model.parseConversations(text)
-        root.historyConversations = fetched
-        root.updateSendOperations(SendState.bindThreads(root.sendOperations, fetched))
-        if (root.pendingOpenThreadId !== "" || root.pendingOpenTitle !== "") {
-          var target = Model.findConversationByThreadId(root.conversations, root.pendingOpenThreadId)
-          if (!target && root.pendingOpenTitle !== "")
-            target = Model.findConversationByTitle(root.conversations, root.pendingOpenTitle)
-          root.pendingOpenThreadId = ""
-          root.pendingOpenTitle = ""
-          if (target && !root.selectedConversation && !root.composing) root.openThread(target)
-        }
+        cachedConversationProcess.running = false
+        root.conversationsAppliedGeneration = root.generation
+        root.applyConversationList(text, true)
       }
     }
     stderr: StdioCollector {
@@ -591,6 +613,22 @@ Item {
       if (!conversationProcess.current) { if (root.opened) Qt.callLater(root.refreshConversations); return }
       root.loading = false
       if (exitCode !== 0) root.error = "Could not load messages"
+    }
+  }
+
+  Process {
+    id: cachedConversationProcess
+    property int generation: -1
+    readonly property bool current: root.opened && generation === root.generation
+    stdout: SplitParser {
+      onRead: function(text) {
+        // Never replace a list the full read already delivered.
+        if (!cachedConversationProcess.current || root.conversationsAppliedGeneration === root.generation) return
+        var fetched = Model.parseConversations(text)
+        if (fetched.length === 0) return
+        root.applyConversationList(text, false)
+        if (!root.selectedConversation) root.loading = false
+      }
     }
   }
 

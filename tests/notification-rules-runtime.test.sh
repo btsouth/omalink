@@ -70,8 +70,8 @@ if command == "status":
                       "devices": [device("abc123", "Pixel"), device("def456", "Galaxy")]}))
 elif command == "watch":
     time.sleep(30)
-elif command in ("conversations", "seen"):
-    print("[]" if command == "conversations" else "{}")
+elif command in ("conversations", "conversations-cached", "seen"):
+    print("{}" if command == "seen" else "[]")
 elif command == "dismiss-all":
     pass
 else:

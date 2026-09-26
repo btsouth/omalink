@@ -84,7 +84,7 @@ Panel {
     selectionGeneration++
     unreadRaw = []
     seenMap = ({})
-    if (opened && messagesReady) { refreshSeen(); refreshUnread() }
+    if (opened && messagesReady) { refreshSeen(); refreshUnreadCached(); refreshUnread() }
   }
 
   // An undefined change removes that key from the saved entry.
@@ -168,6 +168,7 @@ Panel {
     if (opened) {
       phone.refresh()
       refreshSeen()
+      refreshUnreadCached()
       refreshUnread()
     }
   }
@@ -178,6 +179,43 @@ Panel {
     unreadProcess.generation = selectionGeneration
     unreadProcess.command = [phone.helperPath, "conversations", activePhoneId]
     unreadProcess.running = true
+  }
+
+  // KDE Connect's cached thread list, read without asking the phone. It keeps
+  // unread messages current while the panel is closed, so opening it or
+  // clicking a popup shows them at once.
+  function refreshUnreadCached() {
+    if (!messagesReady) return
+    if (unreadCachedProcess.running) { unreadCachedQueued = true; return }
+    unreadCachedQueued = false
+    unreadCachedProcess.deviceId = activePhoneId
+    unreadCachedProcess.generation = selectionGeneration
+    unreadCachedProcess.command = [phone.helperPath, "conversations-cached", activePhoneId]
+    unreadCachedProcess.running = true
+  }
+
+  property bool unreadCachedQueued: false
+
+  // Both reads end by reading the daemon's cache, so whichever finishes last
+  // has the newest list.
+  function applyUnread(text) {
+    unreadRaw = Model.unreadConversations(Model.parseConversations(text))
+  }
+
+  Connections {
+    target: phone
+    function onPhoneEvent() {
+      root.refreshUnreadCached()
+      // A text's notification can arrive just before the message itself.
+      unreadFollowUp.restart()
+    }
+  }
+
+  Timer {
+    id: unreadFollowUp
+    interval: 2000
+    repeat: false
+    onTriggered: root.refreshUnreadCached()
   }
 
   function refreshSeen() {
@@ -225,7 +263,21 @@ Panel {
     onExited: if (!current && root.opened) Qt.callLater(root.refreshUnread)
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: if (unreadProcess.current) root.unreadRaw = Model.unreadConversations(Model.parseConversations(text))
+      onStreamFinished: if (unreadProcess.current) root.applyUnread(text)
+    }
+  }
+
+  Process {
+    id: unreadCachedProcess
+    property string deviceId: ""
+    property int generation: -1
+    readonly property bool current: root.messagesReady && deviceId === root.activePhoneId && generation === root.selectionGeneration
+    onExited: if (!current || root.unreadCachedQueued) Qt.callLater(root.refreshUnreadCached)
+    stdout: StdioCollector {
+      waitForEnd: true
+      // A cold cache is empty, not proof that nothing is unread.
+      onStreamFinished: if (unreadCachedProcess.current && Model.parseConversations(text).length > 0)
+        root.applyUnread(text)
     }
   }
 

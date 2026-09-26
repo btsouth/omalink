@@ -10,10 +10,15 @@ ln -s /usr/share/omarchy/shell/Commons "$work/Commons"
 ln -s /usr/share/omarchy/shell/Ui "$work/Ui"
 cat >"$work/bin/omalink" <<'EOF'
 #!/bin/bash
+if [[ $1 == conversations-cached ]]; then
+  printf '[{"threadId":7,"names":["%s"],"addresses":["+15550000001"],"preview":"cached","timestamp":900,"unread":false}]\n' "$2"
+  exit 0
+fi
 sleep 0.3
 case $1 in
   contacts) printf '[{"name":"%s","number":"+15550000001"}]\n' "$2" ;;
-  conversations) printf '[{"threadId":7,"names":["%s"],"addresses":["+15550000001"],"preview":"fixture","timestamp":1000,"unread":false}]\n' "$2" ;;
+  conversations) [[ $2 == late ]] && { printf '[{"threadId":8,"names":["late"],"addresses":["+15550000002"],"preview":"new thread","timestamp":2000,"unread":true}]\n'; exit 0; }
+    printf '[{"threadId":7,"names":["%s"],"addresses":["+15550000001"],"preview":"fixture","timestamp":1000,"unread":false}]\n' "$2" ;;
   messages) printf '[{"body":"fixture message","timestamp":1000,"incoming":true,"attachments":[]}]\n' ;;
   attachment) printf '/tmp/should-not-open.png\n' ;;
   *) : ;;

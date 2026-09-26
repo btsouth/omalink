@@ -42,12 +42,23 @@ Item {
   property string privateDestinationName: ""
   readonly property bool actionBusy: actionProcess.running || privateAction.running
   property string actionSuccess: ""
+  // A refresh asked for while one runs, such as a notification arriving
+  // mid-read. It runs as soon as the current one finishes instead of waiting
+  // for the next timer tick.
+  property bool refreshQueued: false
   signal selectionSuggested(string deviceId, string deviceName)
+  // The watcher saw a new phone notification.
+  signal phoneEvent()
 
   readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 15, 5, 300)
   readonly property var notifySources: settings && settings["notifyApps"] !== undefined && settings["notifyApps"] !== null
     ? String(settings["notifyApps"]) : undefined
-  readonly property string notifyPopups: String(setting("notifyPopups", "On")).toLowerCase() === "off" ? "off" : "on"
+  // Message popups name the sender unless panel content is hidden, which keeps
+  // them to the app name.
+  readonly property bool panelContentHidden: settings && settings.panelContent !== undefined
+    && String(settings.panelContent) !== "Show"
+  readonly property string notifyPopups: String(setting("notifyPopups", "On")).toLowerCase() === "off" ? "off"
+    : panelContentHidden ? "on" : "sender"
   readonly property var notifyRules: NotificationPolicy.normalizeRules(setting("notifyAppRules", null))
   readonly property string notifyRulesArgument: NotificationPolicy.helperArgument(notifyRules)
   readonly property bool mediaControls: String(setting("mediaControls", "On")).toLowerCase() !== "off"
@@ -163,12 +174,20 @@ Item {
   }
 
   function refresh() {
-    if (statusProcess.running || statusOutputWait.running) return
+    if (statusProcess.running || statusOutputWait.running) {
+      refreshQueued = true
+      return
+    }
+    refreshQueued = false
     refreshing = true
     statusOutputPending = true
     statusProcess.generation = statusGeneration
     statusProcess.command = withNotify([helperPath, "status"])
     statusProcess.running = true
+  }
+
+  function runQueuedRefresh() {
+    if (refreshQueued) Qt.callLater(refresh)
   }
 
   function applyStatus(raw) {
@@ -306,7 +325,10 @@ Item {
     command: root.withNotify([root.helperPath, "watch"])
     running: true
     stdout: SplitParser {
-      onRead: root.refresh()
+      onRead: {
+        root.refresh()
+        root.phoneEvent()
+      }
     }
     onExited: watchRestart.restart()
   }
@@ -329,12 +351,14 @@ Item {
         statusOutputWait.stop()
         if (statusProcess.current) root.applyStatus(text)
         else if (!statusProcess.running) Qt.callLater(root.refresh)
+        if (!statusProcess.running) root.runQueuedRefresh()
       }
     }
     onExited: function(exitCode) {
       root.refreshing = false
       if (root.statusOutputPending) statusOutputWait.restart()
       else if (!statusProcess.current) Qt.callLater(root.refresh)
+      else root.runQueuedRefresh()
       if (!statusProcess.current) return
       if (exitCode !== 0) {
         root.statusReady = true
@@ -349,6 +373,7 @@ Item {
     onTriggered: {
       root.statusOutputPending = false
       if (!statusProcess.current) root.refresh()
+      else root.runQueuedRefresh()
     }
   }
 

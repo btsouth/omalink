@@ -21,7 +21,7 @@ with (root / "calls.jsonl").open("a") as stream:
     stream.write(json.dumps([command, device]) + "\n")
 if command == "contacts":
     print("[]")
-elif command == "conversations":
+elif command in ("conversations", "conversations-cached"):
     print(json.dumps([{"threadId":7,"names":[device],"addresses":["+15550000001"],
         "preview":device + " history","timestamp":1000,"incoming":True,"unread":False}]))
 elif command == "messages":
@@ -46,7 +46,7 @@ import json
 import pathlib
 import sys
 calls = collections.Counter(tuple(json.loads(line)) for line in pathlib.Path(sys.argv[1]).read_text().splitlines())
-assert calls == {("contacts","old"):2,("conversations","old"):2,("messages","old"):2,
-                 ("contacts","new"):1,("conversations","new"):1,("messages","new"):1}, calls
+assert calls == {("contacts","old"):2,("conversations","old"):2,("conversations-cached","old"):2,("messages","old"):2,
+                 ("contacts","new"):1,("conversations","new"):1,("conversations-cached","new"):1,("messages","new"):1}, calls
 print("provider routing invocation checks passed")
 PY

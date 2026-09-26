@@ -12,7 +12,7 @@ kdeconnect_service=org.kde.kdeconnect
 original_args=("$@")
 
 usage() {
-  echo "Usage: omalink [--notify-apps \"App, Package\"] [--notify-rules JSON] [--popups on|off] <status|diagnostics|watch|media|media-action|media-volume|media-seek|ring|clipboard|text-stdin|dismiss|dismiss-all|contacts|conversations|messages|attachment|attachment-open|attachment-save|seen|mark-seen> [arguments]" >&2
+  echo "Usage: omalink [--notify-apps \"App, Package\"] [--notify-rules JSON] [--popups on|sender|off] <status|diagnostics|watch|media|media-action|media-volume|media-seek|ring|clipboard|text-stdin|dismiss|dismiss-all|contacts|conversations|conversations-cached|messages|attachment|attachment-open|attachment-save|seen|mark-seen> [arguments]" >&2
   exit 2
 }
 
@@ -390,7 +390,11 @@ status() {
   kdeconnect_service="$owner"
   # Enumerate IDs only. Names are read from the owner-bound object, so a hostile
   # newline in a device name cannot masquerade as a second discovery entry.
-  if ! raw="$(timeout --kill-after=1s 5s kdeconnect-cli --list-devices --id-only 2>/dev/null | head -c "$capture_max_bytes")"; then
+  # This asks the daemon directly: kdeconnect-cli --list-devices makes the same
+  # call but sleeps two seconds first, which made every refresh that slow.
+  raw="$(dbus_bounded 5s busctl --user --json=short call -- "$kdeconnect_service" \
+    /modules/kdeconnect org.kde.kdeconnect.daemon devices bb false false)"
+  if ! raw="$(jq -rn 'input | .data[0] | if type == "array" then .[] | strings else error end' <<<"$raw" 2>/dev/null)"; then
     status_failure true "$version" 'Could not refresh phone status'
     [[ $diagnostics == true ]] && return 0
     return 1
@@ -742,6 +746,16 @@ notify_escape() {
   printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
 }
 
+# Texting apps, and any app whose notification is a conversation (WhatsApp,
+# Signal, Teams chats). Those titles are a sender or group name.
+message_notification() {
+  local notification_path="$1" package_name="$2"
+  case "$package_name" in
+    com.google.android.apps.messaging|com.samsung.android.messaging|com.android.messaging|com.android.mms) return 0 ;;
+  esac
+  [[ "$(dbus_json_property "$notification_path" isConversation)" == true ]]
+}
+
 handle_posted() {
   local device_id="$1" notification_id="$2" notification_path app_name package_name title text silent summary body action
   [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ && $notification_id =~ ^[A-Za-z0-9_][A-Za-z0-9._:-]{0,127}$ ]] || return 0
@@ -764,6 +778,12 @@ handle_posted() {
   fi
   summary="$(notify_escape "${app_name:-Phone notification}")"
   body="Open OmaLink to read it"
+  # A text or chat names its sender (or group) in the title. With --popups
+  # sender that name goes in the popup; the message itself never does.
+  if [[ $NOTIFY_POPUPS == sender && -n $title ]] && message_notification "$notification_path" "$package_name"; then
+    summary="$(notify_escape "New message from ${title:0:80}")"
+    body="Click to read it in OmaLink"
+  fi
   action="$(timeout --kill-after=1s 30s notify-send -a OmaLink \
     -A "default=Open" -- "$summary" "$body" 2>/dev/null || true)"
   if [[ $action == default ]]; then
@@ -846,7 +866,7 @@ watch() {
         workers=("${live[@]}")
         # Dropped popups stay available in the panel. A flood never creates
         # unbounded helpers waiting for popup actions.
-        if [[ $NOTIFY_POPUPS == on ]] && (( ${#workers[@]} < 4 )); then
+        if [[ $NOTIFY_POPUPS != off ]] && (( ${#workers[@]} < 4 )); then
           setsid "$0" "${options[@]}" _posted "$device_id" "$notification_id" 9>&- &
           workers+=("$!")
         fi
@@ -938,6 +958,40 @@ active_conversations_raw() {
     org.kde.kdeconnect.device.conversations activeConversations
 }
 
+# Prints the thread list from one activeConversations reply, newest first.
+conversation_list_json() {
+  local raw="$1" contacts_file="$2"
+  jq -c --slurpfile contactsFile "$contacts_file" '
+    $contactsFile[0] as $contacts |
+    def number_key:
+      gsub("[^0-9]"; "") | if length > 10 then .[-10:] else . end;
+    ($contacts | reduce .[] as $contact ({};
+      .[($contact.number | number_key)] = $contact.name)) as $contactNames
+    |
+    def display_name:
+      . as $address | ($address | number_key) as $key | $contactNames[$key] // $address;
+    [.data[0][]? | .data as $message | {
+      threadId: $message[6],
+      preview: (($message[1] // "") | tostring | .[0:$previewMax]),
+      addresses: ([$message[2][0:20][]?[0] | tostring | .[0:128]] | unique),
+      names: ([$message[2][0:20][]?[0] | tostring | .[0:128] | display_name] | unique),
+      timestamp: $message[3],
+      unread: ($message[5] == 0),
+      incoming: ($message[4] == 1),
+      attachmentCount: ($message[9] | length),
+      attachments: [$message[9][]? | {
+        partId: .[0], mimeType: ((.[1] // "") | tostring | .[0:128]),
+        thumbnail: (if ((.[2] // "") | tostring | length) <= $thumbMax then (.[2] // "") else "" end),
+        unique: (if ((.[3] // "") | type == "string" and length <= 256) then .[3] else "" end)
+      }][0:$attachmentsMax]
+    }]
+    | sort_by(.timestamp)
+    | reverse
+    | .[0:$threadsMax]
+  ' --argjson threadsMax "$threads_max" --argjson thumbMax "$thumbnail_max_chars" \
+    --argjson attachmentsMax "$attachments_per_message" --argjson previewMax "$preview_max_chars" <<<"$raw"
+}
+
 conversations() {
   local device_id="${1:-}" device_path contacts_file raw prev attempt count requested=0 settled=0
   [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ ]] || usage
@@ -979,35 +1033,28 @@ conversations() {
     echo "The phone connection is not ready yet" >&2
     exit 1
   fi
-  jq -c --slurpfile contactsFile "$contacts_file" '
-    $contactsFile[0] as $contacts |
-    def number_key:
-      gsub("[^0-9]"; "") | if length > 10 then .[-10:] else . end;
-    ($contacts | reduce .[] as $contact ({};
-      .[($contact.number | number_key)] = $contact.name)) as $contactNames
-    |
-    def display_name:
-      . as $address | ($address | number_key) as $key | $contactNames[$key] // $address;
-    [.data[0][]? | .data as $message | {
-      threadId: $message[6],
-      preview: (($message[1] // "") | tostring | .[0:$previewMax]),
-      addresses: ([$message[2][0:20][]?[0] | tostring | .[0:128]] | unique),
-      names: ([$message[2][0:20][]?[0] | tostring | .[0:128] | display_name] | unique),
-      timestamp: $message[3],
-      unread: ($message[5] == 0),
-      incoming: ($message[4] == 1),
-      attachmentCount: ($message[9] | length),
-      attachments: [$message[9][]? | {
-        partId: .[0], mimeType: ((.[1] // "") | tostring | .[0:128]),
-        thumbnail: (if ((.[2] // "") | tostring | length) <= $thumbMax then (.[2] // "") else "" end),
-        unique: (if ((.[3] // "") | type == "string" and length <= 256) then .[3] else "" end)
-      }][0:$attachmentsMax]
-    }]
-    | sort_by(.timestamp)
-    | reverse
-    | .[0:$threadsMax]
-  ' --argjson threadsMax "$threads_max" --argjson thumbMax "$thumbnail_max_chars" \
-    --argjson attachmentsMax "$attachments_per_message" --argjson previewMax "$preview_max_chars" <<<"$raw"
+  conversation_list_json "$raw" "$contacts_file"
+  exit 0
+}
+
+# The daemon's cached thread list, without asking the phone for new messages. It
+# answers in well under a second, so the panel and the Messages window show it
+# at once and let the slower conversations read above bring it up to date.
+conversations_cached() {
+  local device_id="${1:-}" device_path contacts_file raw
+  [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ ]] || usage
+  device_path="/modules/kdeconnect/devices/$device_id"
+  raw="$(active_conversations_raw "$device_path" 2>/dev/null || true)"
+  if [[ -z $raw ]]; then
+    echo "The phone connection is not ready yet" >&2
+    exit 1
+  fi
+  contacts_file="$(mktemp)"
+  trap 'rm -f -- "$contacts_file"' EXIT
+  trap 'exit 143' TERM HUP
+  trap 'exit 130' INT
+  contact_records_json "$device_id" >"$contacts_file"
+  conversation_list_json "$raw" "$contacts_file"
   exit 0
 }
 
@@ -1290,13 +1337,13 @@ while (( $# > 0 )); do
     *) break ;;
   esac
 done
-[[ $NOTIFY_POPUPS == on || $NOTIFY_POPUPS == off ]] || usage
+[[ $NOTIFY_POPUPS == on || $NOTIFY_POPUPS == sender || $NOTIFY_POPUPS == off ]] || usage
 
 # Per-call timeouts also need an overall deadline: a dead daemon must not
 # multiply a five-second wait by every field of every notification.
 if [[ ${OMALINK_TIMED:-} != 1 ]]; then
   case "${1:-}" in
-    status | diagnostics | conversations | dismiss-all)
+    status | diagnostics | conversations | conversations-cached | dismiss-all)
       export OMALINK_TIMED=1
       exec timeout --kill-after=2s 45s "$0" "${original_args[@]}"
       ;;
@@ -1327,6 +1374,7 @@ case "${1:-}" in
   dismiss-all) shift; dismiss_all_notifications "${1:-}" ;;
   contacts) shift; contacts "${1:-}" ;;
   conversations) shift; conversations "${1:-}" ;;
+  conversations-cached) shift; conversations_cached "${1:-}" ;;
   messages) shift; messages "${1:-}" "${2:-}" ;;
   attachment) shift; attachment "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
   attachment-open) shift; open_attachment "${1:-}" ;;
