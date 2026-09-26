@@ -5,7 +5,7 @@ assert.deepEqual(model.parseStatus(""), model.defaultStatus())
 assert.equal(model.parseStatus("not json").ok, false)
 for (const value of ["null", "[]", "4", "{}", '{"ok":true,"installed":true,"devices":{}}'])
   assert.equal(model.parseStatus(value).ok, false)
-const phones = [{id:"abc123",name:"Pixel"},{id:"def456",name:"Galaxy"}]
+const phones = [{id:"abc123",name:"Pixel",paired:true},{id:"def456",name:"Galaxy",paired:true}]
 assert.equal(model.selectedDeviceId(phones, ""), "", "several phones need explicit selection")
 assert.equal(model.selectedDeviceId([phones[0]], ""), "abc123")
 assert.equal(model.selectedDeviceId(phones.slice().reverse(), "abc123"), "abc123")
@@ -15,7 +15,7 @@ assert.equal(model.deviceById([phones[1]], "abc123"), null)
 assert.equal(model.deviceById(phones, "def456").name, "Galaxy")
 assert.equal(model.validDeviceId("../abc"), false)
 assert.equal(model.validDeviceId("a".repeat(129)), false)
-const normalized = model.parseStatus(JSON.stringify({ok:true,installed:true,devices:[
+const normalized = model.parseStatus(JSON.stringify({...model.defaultStatus(),schemaVersion:1,ok:true,installed:true,devices:[
   ...phones, phones[0], {id:"../../escape",name:"Bad"}, {id:"ghi789",name:"N".repeat(500)}, null
 ]}))
 assert.equal(normalized.devices.length, 3)

@@ -2,10 +2,11 @@
 
 set -euo pipefail
 umask 077
+kdeconnect_service=org.kde.kdeconnect
 original_args=("$@")
 
 usage() {
-  echo "Usage: omalink [--notify-apps \"App, Package\"] [--popups on|off] <status|watch|media|media-action|media-volume|media-seek|ring|clipboard|share|dismiss|dismiss-all|notify-reply|contacts|conversations|messages|attachment|attachment-open|attachment-save|reply|sms|seen|mark-seen> [arguments]" >&2
+  echo "Usage: omalink [--notify-apps \"App, Package\"] [--popups on|off] <status|diagnostics|watch|media|media-action|media-volume|media-seek|ring|clipboard|share|dismiss|dismiss-all|notify-reply|contacts|conversations|messages|attachment|attachment-open|attachment-save|reply|sms|seen|mark-seen> [arguments]" >&2
   exit 2
 }
 
@@ -246,56 +247,195 @@ boolean_or() {
   printf '%s' "$value"
 }
 
-status() {
-  if ! command -v kdeconnect-cli >/dev/null 2>&1; then
-    jq -cn '{ok: true, installed: false, devices: [], statusText: "KDE Connect is not installed"}'
-    return
-  fi
+# Evidence used to enable actions must not survive a failed/partial response.
+# Unlike optional content reads, metadata is captured privately and printed only
+# after successful exit, with a smaller independent ceiling.
+strict_metadata() {
+  local raw LC_ALL=C
+  raw="$(timeout --kill-after=1s 2s "$@" 2>/dev/null | head -c 65537)" || return 1
+  (( ${#raw} <= 65536 )) || return 1
+  printf '%s\n' "$raw"
+}
 
-  local raw line id name device_path charge charging network_strength network_type notifications
-  local -a devices=()
-  local media
-  # Enumeration failure is not a successful empty list. Preserve the command's
-  # exit status while keeping the same timeout and byte ceiling as other reads.
-  if ! raw="$(timeout --kill-after=1s 5s kdeconnect-cli --list-available --id-name-only 2>/dev/null | head -c "$capture_max_bytes")"; then
-    jq -cn '{ok: false, installed: true, devices: [], statusText: "Could not refresh phone status"}'
+metadata_boolean() {
+  local raw
+  raw="$(strict_metadata busctl --user get-property -- "$kdeconnect_service" "$1" \
+    org.kde.kdeconnect.device "$2")" || { printf 'null'; return; }
+  case $raw in 'b true') printf 'true' ;; 'b false') printf 'false' ;; *) printf 'null' ;; esac
+}
+
+backend_version() {
+  local raw
+  raw="$(strict_metadata kdeconnect-cli --version || true)"
+  if [[ $raw =~ ^kdeconnect-cli[[:space:]]+([0-9]{1,4}\.[0-9]{1,4}(\.[0-9]{1,6})?([-+][A-Za-z0-9][A-Za-z0-9._+-]{0,31})?)$ ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+  fi
+}
+
+backend_owner() {
+  strict_metadata busctl --user --json=short call -- org.freedesktop.DBus \
+    /org/freedesktop/DBus org.freedesktop.DBus GetNameOwner s org.kde.kdeconnect \
+    | jq -r 'if .type == "s" and (.data[0] | type == "string")
+        and (.data[0] | test("^:[0-9]+\\.[0-9]+$")) then .data[0] else empty end' 2>/dev/null || true
+}
+
+plugin_list() {
+  local path="$1" kind="$2" raw
+  if [[ $kind == supported ]]; then
+    raw="$(strict_metadata busctl --user --json=short get-property -- "$kdeconnect_service" \
+      "$path" org.kde.kdeconnect.device supportedPlugins || true)"
+  else
+    raw="$(strict_metadata busctl --user --json=short call -- "$kdeconnect_service" \
+      "$path" org.kde.kdeconnect.device loadedPlugins || true)"
+  fi
+  jq -c --arg kind "$kind" '
+    (if $kind == "supported" then .data else .data[0] end) as $list |
+    if .type == "as" and ($list | type == "array") and ($list | length <= 128)
+       and ($list | all(.[]; type == "string" and test("^kdeconnect_[a-z0-9_]{1,80}$")))
+    then $list else null end' <<<"$raw" 2>/dev/null || printf 'null\n'
+}
+
+capabilities_json() {
+  local path="$1" paired="$2" reachable="$3" supported loaded name plugin enabled raw
+  local -a evidence=()
+  supported="$(plugin_list "$path" supported)"; supported="${supported:-null}"
+  loaded="$(plugin_list "$path" loaded)"; loaded="${loaded:-null}"
+  for name in messaging contacts notifications sharing clipboard ring media battery files connectivity; do
+    case $name in
+      messaging) plugin=kdeconnect_sms ;;
+      sharing) plugin=kdeconnect_share ;;
+      ring) plugin=kdeconnect_findmyphone ;;
+      media) plugin=kdeconnect_mprisremote ;;
+      files) plugin=kdeconnect_sftp ;;
+      connectivity) plugin=kdeconnect_connectivity_report ;;
+      *) plugin="kdeconnect_$name" ;;
+    esac
+    raw="$(strict_metadata busctl --user --json=short call -- "$kdeconnect_service" \
+      "$path" org.kde.kdeconnect.device isPluginEnabled s "$plugin" || true)"
+    enabled="$(jq -c 'if .type == "b" and (.data[0] | type == "boolean") then .data[0] else null end' <<<"$raw" 2>/dev/null || true)"
+    evidence+=("$(jq -cn --arg name "$name" --arg plugin "$plugin" --argjson enabled "${enabled:-null}" \
+      --argjson supported "$supported" --argjson loaded "$loaded" \
+      '{key:$name,value:{plugin:$plugin,enabled:$enabled,permission:"unknown",
+        supported:(if $supported == null then null else ($supported | index($plugin) != null) end),
+        loaded:(if $loaded == null then null else ($loaded | index($plugin) != null) end)}}')")
+  done
+  printf '%s\n' "${evidence[@]}" | jq -sc --argjson paired "$paired" --argjson reachable "$reachable" '
+    from_entries | with_entries(.value |= (
+      . + (if $paired == false then {state:"unknown",reason:"unpaired"}
+           elif $reachable == false then {state:"unknown",reason:"offline"}
+           elif $paired != true or $reachable != true then {state:"unknown",reason:"connection-unknown"}
+           elif .supported == false then {state:"unsupported",reason:"not-supported"}
+           elif .enabled == false then {state:"disabled",reason:"plugin-disabled"}
+           elif .supported == true and .enabled == true and .loaded == true then {state:"available",reason:"plugin-ready"}
+           elif .loaded == false then {state:"unknown",reason:"plugin-not-loaded"}
+           else {state:"unknown",reason:"capability-unknown"} end)))'
+}
+
+require_messaging_capability() {
+  local device_id="$1" plugin="$2" owner path paired reachable loaded
+  owner="$(backend_owner)"
+  [[ -n $owner ]] || { echo 'KDE Connect backend is unavailable' >&2; return 1; }
+  kdeconnect_service="$owner"
+  path="/modules/kdeconnect/devices/$device_id"
+  paired="$(metadata_boolean "$path" isPaired)"
+  reachable="$(metadata_boolean "$path" isReachable)"
+  loaded="$(plugin_list "$path" loaded)"
+  if [[ $paired != true || $reachable != true ]] \
+      || ! jq -e --arg plugin "$plugin" 'type == "array" and index($plugin) != null' <<<"${loaded:-null}" >/dev/null 2>&1 \
+      || [[ $(backend_owner) != "$owner" ]]; then
+    echo 'Phone messaging is not ready; check pairing, connection and enabled plugins' >&2
     return 1
   fi
+}
 
-  while IFS= read -r line; do
-    [[ -n $line ]] || continue
-    id="${line%% *}"
-    name="${line#* }"
-    # A device name that contains a line break would otherwise parse as a second
-    # device with an id no D-Bus path can use.
-    [[ -n $id && $name != "$line" && $id =~ ^[A-Za-z0-9]{1,128}$ ]] || continue
-    (( ${#devices[@]} < 8 )) || break
-    name="$(truncate_text "$name" "$name_max_chars")"
-    device_path="/modules/kdeconnect/devices/$id"
-    charge="$(dbus_property "$device_path/battery" org.kde.kdeconnect.device.battery charge i)"
-    charging="$(dbus_property "$device_path/battery" org.kde.kdeconnect.device.battery isCharging b)"
-    network_strength="$(dbus_property "$device_path/connectivity_report" org.kde.kdeconnect.device.connectivity_report cellularNetworkStrength i)"
-    network_type="$(dbus_property "$device_path/connectivity_report" org.kde.kdeconnect.device.connectivity_report cellularNetworkType s)"
-    notifications="$(notification_json "$device_path")"
-    media="$(media_json "$device_path")"
-    devices+=("$(jq -cs \
-      --arg id "$id" \
-      --arg name "$name" \
-      --argjson charge "$(numeric_or "${charge:-}" null)" \
-      --argjson charging "$(boolean_or "${charging:-}" false)" \
-      --argjson networkStrength "$(numeric_or "${network_strength:-}" null)" \
-      --arg networkType "$(truncate_text "${network_type:-}" 32)" \
-      --argjson media "${media:-null}" \
-      '{id: $id, name: $name, battery: {charge: $charge, charging: $charging}, connectivity: {strength: $networkStrength, type: $networkType}, notifications: .[0], media: $media}' <<<"${notifications:-[]}")")
-  done <<<"$raw"
+status_failure() {
+  local installed="$1" version="$2" reason="$3" code
+  case $reason in
+    'KDE Connect backend is unavailable') code=backend-unavailable ;;
+    'KDE Connect restarted during refresh') code=backend-restarted ;;
+    *) code=discovery-failed ;;
+  esac
+  jq -cn --arg code "$code" --argjson installed "$installed" --arg version "$version" --arg reason "$reason" \
+    '{schemaVersion:1,ok:false,installed:$installed,devices:[],observedAt:0,discoveryTruncated:false,
+      backend:{name:"kdeconnect",available:false,version:(if $version == "" then null else $version end),versionSource:"kdeconnect-cli"},
+      statusText:$reason,failureReason:$code}'
+}
 
-  if (( ${#devices[@]} == 0 )); then
-    jq -cn '{ok: true, installed: true, devices: [], statusText: "No phone connected"}'
-  else
-    printf '%s\n' "${devices[@]}" | jq -sc '
-      {ok: true, installed: true, devices: ., statusText:
-        (if length == 1 then .[0].name else "\(length) phones connected" end)}'
+status() {
+  local diagnostics="${1:-false}" version owner end_owner raw id name device_path paired reachable type
+  local charge charging network_strength network_type notifications media capabilities count=0 truncated=false
+  local -a devices=()
+  local -A seen_devices=()
+  if ! command -v kdeconnect-cli >/dev/null 2>&1; then
+    jq -cn '{schemaVersion:1,ok:true,installed:false,devices:[],observedAt:0,discoveryTruncated:false,
+      backend:{name:"kdeconnect",available:false,version:null,versionSource:"kdeconnect-cli"},statusText:"KDE Connect is not installed"}'
+    return
   fi
+  version="$(backend_version)"
+  owner="$(backend_owner)"
+  if [[ -z $owner ]]; then
+    status_failure true "$version" 'KDE Connect backend is unavailable'
+    [[ $diagnostics == true ]] && return 0
+    return 1
+  fi
+  kdeconnect_service="$owner"
+  # Enumerate IDs only. Names are read from the owner-bound object, so a hostile
+  # newline in a device name cannot masquerade as a second discovery entry.
+  if ! raw="$(timeout --kill-after=1s 5s kdeconnect-cli --list-devices --id-only 2>/dev/null | head -c "$capture_max_bytes")"; then
+    status_failure true "$version" 'Could not refresh phone status'
+    [[ $diagnostics == true ]] && return 0
+    return 1
+  fi
+  while IFS= read -r id; do
+    [[ $id =~ ^[A-Za-z0-9]{1,128}$ ]] || continue
+    [[ -z ${seen_devices[$id]:-} ]] || continue
+    seen_devices[$id]=1
+    if (( count >= 8 )); then truncated=true; break; fi
+    count=$((count + 1))
+    device_path="/modules/kdeconnect/devices/$id"
+    name="$(truncate_text "$(dbus_property "$device_path" org.kde.kdeconnect.device name s)" "$name_max_chars")"
+    [[ -n $name ]] || name='Unnamed device'
+    type="$(dbus_property "$device_path" org.kde.kdeconnect.device type s)"
+    case $type in phone|tablet|desktop|laptop|tv) ;; *) type=unknown ;; esac
+    paired="$(metadata_boolean "$device_path" isPaired)"
+    reachable="$(metadata_boolean "$device_path" isReachable)"
+    capabilities="$(capabilities_json "$device_path" "$paired" "$reachable")"
+    charge=null; charging=null; network_strength=null; network_type=''; notifications='[]'; media=null
+    # Diagnostics only examines backend/device/plugin metadata. Never collect
+    # notification bodies, contact records, media titles or cached content.
+    if [[ $diagnostics == false && $paired == true && $reachable == true ]]; then
+      charge="$(numeric_or "$(dbus_property "$device_path/battery" org.kde.kdeconnect.device.battery charge i)" null)"
+      charging="$(boolean_or "$(dbus_property "$device_path/battery" org.kde.kdeconnect.device.battery isCharging b)" null)"
+      network_strength="$(numeric_or "$(dbus_property "$device_path/connectivity_report" org.kde.kdeconnect.device.connectivity_report cellularNetworkStrength i)" null)"
+      network_type="$(dbus_property "$device_path/connectivity_report" org.kde.kdeconnect.device.connectivity_report cellularNetworkType s)"
+      notifications="$(notification_json "$device_path")"
+      media="$(media_json "$device_path")"
+    fi
+    devices+=("$(jq -cs --arg id "$id" --arg name "$name" --arg type "$type" \
+      --argjson paired "$paired" --argjson reachable "$reachable" --argjson capabilities "$capabilities" \
+      --argjson charge "$charge" --argjson charging "$charging" --argjson networkStrength "$network_strength" \
+      --arg networkType "$(truncate_text "$network_type" 32)" --argjson media "$media" \
+      '{id:$id,name:$name,type:$type,paired:$paired,reachable:$reachable,
+        connectionState:(if $paired == false then "unpaired" elif $reachable == false then "offline"
+          elif $paired == true and $reachable == true then "ready" else "unknown" end),capabilities:$capabilities,
+        battery:{charge:$charge,charging:$charging},connectivity:{strength:$networkStrength,type:$networkType},
+        notifications:.[0],media:$media}' <<<"$notifications")")
+  done <<<"$raw"
+  end_owner="$(backend_owner)"
+  if [[ $end_owner != "$owner" ]]; then
+    status_failure true "$version" 'KDE Connect restarted during refresh'
+    [[ $diagnostics == true ]] && return 0
+    return 1
+  fi
+  local observed_at
+  observed_at="$(date +%s%3N)"
+  printf '%s\n' "${devices[@]}" | jq -sc --arg version "$version" --argjson observedAt "$observed_at" \
+    --argjson truncated "$truncated" --argjson diagnostics "$diagnostics" '
+    . as $devices | {schemaVersion:1,ok:true,installed:true,observedAt:$observedAt,discoveryTruncated:$truncated,
+      backend:{name:"kdeconnect",available:true,version:(if $version == "" then null else $version end),versionSource:"kdeconnect-cli"},
+      devices:(if $diagnostics then to_entries | map({label:("device-" + ((.key + 1)|tostring)),
+        type:.value.type,paired:.value.paired,reachable:.value.reachable,connectionState:.value.connectionState,capabilities:.value.capabilities})
+        else . end),statusText:(if length == 0 then "No devices found" else "Device status refreshed" end)}'
 }
 
 notification_json() {
@@ -304,7 +444,7 @@ notification_json() {
   local -a notifications=()
   local read_count=0 kept_count=0
 
-  raw="$(dbus_bounded 5s busctl --user --json=short call -- org.kde.kdeconnect \
+  raw="$(dbus_bounded 5s busctl --user --json=short call -- "$kdeconnect_service" \
     "$notification_root" org.kde.kdeconnect.device.notifications activeNotifications)"
   while IFS= read -r notification_id; do
     [[ $read_count -lt $notifications_read_max && $kept_count -lt $notifications_max ]] || break
@@ -378,14 +518,14 @@ notification_allowed() {
 
 dbus_json_property() {
   local path="$1" property="$2"
-  dbus_bounded 5s busctl --user --json=short get-property -- org.kde.kdeconnect "$path" \
+  dbus_bounded 5s busctl --user --json=short get-property -- "$kdeconnect_service" "$path" \
     org.kde.kdeconnect.device.notifications.notification "$property" \
     | jq -r '.data // empty' 2>/dev/null || true
 }
 
 dbus_property() {
   local path="$1" interface="$2" property="$3" signature="$4" raw
-  raw="$(dbus_bounded 5s busctl --user get-property -- org.kde.kdeconnect "$path" "$interface" "$property")"
+  raw="$(dbus_bounded 5s busctl --user get-property -- "$kdeconnect_service" "$path" "$interface" "$property")"
   [[ $raw == "$signature "* ]] || return 0
   raw="${raw#* }"
   if [[ $signature == s ]]; then
@@ -401,7 +541,7 @@ dbus_property() {
 media_json() {
   local device_path="$1" mpris_path="$1/mprisremote" raw player_list
   local player title artist album volume length position is_playing can_seek album_art
-  raw="$(dbus_bounded 5s busctl --user --json=short get-property -- org.kde.kdeconnect \
+  raw="$(dbus_bounded 5s busctl --user --json=short get-property -- "$kdeconnect_service" \
     "$mpris_path" org.kde.kdeconnect.device.mprisremote playerList)"
   player_list="$(jq -c --argjson max "$players_max" --argjson chars "$media_max_chars" \
     '[(.data // [])[] | (tostring | .[0:$chars])][0:$max]' <<<"$raw" 2>/dev/null || true)"
@@ -483,14 +623,14 @@ media() {
 media_action() {
   local device_id="${1:-}" action="${2:-}"
   [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ && $action =~ ^(PlayPause|Play|Pause|Next|Previous|Stop|Rewind|FastForward)$ ]] || usage
-  timeout --kill-after=1s 10s busctl --user call -- org.kde.kdeconnect "/modules/kdeconnect/devices/$device_id/mprisremote" \
+  timeout --kill-after=1s 10s busctl --user call -- "$kdeconnect_service" "/modules/kdeconnect/devices/$device_id/mprisremote" \
     org.kde.kdeconnect.device.mprisremote sendAction s "$action" >/dev/null
 }
 
 media_volume() {
   local device_id="${1:-}" volume="${2:-}"
   [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ && $volume =~ ^[0-9]{1,3}$ && $((10#$volume)) -le 100 ]] || usage
-  timeout --kill-after=1s 10s busctl --user call -- org.kde.kdeconnect "/modules/kdeconnect/devices/$device_id/mprisremote" \
+  timeout --kill-after=1s 10s busctl --user call -- "$kdeconnect_service" "/modules/kdeconnect/devices/$device_id/mprisremote" \
     org.freedesktop.DBus.Properties Set ssv \
     org.kde.kdeconnect.device.mprisremote volume i "$((10#$volume))" >/dev/null
 }
@@ -513,14 +653,14 @@ media_seek() {
   [[ $position =~ ^-?[0-9]{1,10}$ ]] || usage
   offset=$((10#$target - position))
   (( offset >= -2147483648 && offset <= 2147483647 )) || usage
-  timeout --kill-after=1s 10s busctl --user call -- org.kde.kdeconnect "$mpris_path" \
+  timeout --kill-after=1s 10s busctl --user call -- "$kdeconnect_service" "$mpris_path" \
     org.kde.kdeconnect.device.mprisremote seek i "$offset" >/dev/null
 }
 
 dismiss_notification() {
   local device_id="${1:-}" notification_id="${2:-}"
   [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ && $notification_id =~ ^[A-Za-z0-9_][A-Za-z0-9._:-]{0,127}$ && $notification_id != -* && $notification_id != . && $notification_id != .. ]] || usage
-  timeout --kill-after=1s 10s busctl --user call -- org.kde.kdeconnect \
+  timeout --kill-after=1s 10s busctl --user call -- "$kdeconnect_service" \
     "/modules/kdeconnect/devices/$device_id/notifications/$notification_id" \
     org.kde.kdeconnect.device.notifications.notification dismiss >/dev/null
 }
@@ -652,7 +792,8 @@ watch() {
 notify_reply() {
   local device_id="${1:-}" reply_id="${2:-}" message="${3:-}"
   [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ && $reply_id =~ ^[A-Za-z0-9_][A-Za-z0-9._:-]{0,127}$ && $reply_id != -* && -n $message ]] || usage
-  timeout --kill-after=1s 10s busctl --user call -- org.kde.kdeconnect \
+  require_messaging_capability "$device_id" kdeconnect_notifications || return 1
+  timeout --kill-after=1s 10s busctl --user call -- "$kdeconnect_service" \
     "/modules/kdeconnect/devices/$device_id/notifications" \
     org.kde.kdeconnect.device.notifications sendReply ss "$reply_id" "$message" >/dev/null
 }
@@ -662,7 +803,7 @@ dismiss_all_notifications() {
   [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ ]] || usage
   local read_count=0
   notification_root="/modules/kdeconnect/devices/$device_id/notifications"
-  raw="$(dbus_bounded 5s busctl --user --json=short call -- org.kde.kdeconnect \
+  raw="$(dbus_bounded 5s busctl --user --json=short call -- "$kdeconnect_service" \
     "$notification_root" org.kde.kdeconnect.device.notifications activeNotifications)"
   while IFS= read -r notification_id; do
     (( read_count < notifications_read_max )) || break
@@ -672,7 +813,7 @@ dismiss_all_notifications() {
     app_name="$(truncate_text "$(dbus_json_property "$notification_path" appName)" "$name_max_chars")"
     internal_id="$(truncate_text "$(dbus_json_property "$notification_path" internalId)" "$name_max_chars")"
     notification_allowed "$app_name" "$internal_id" || continue
-    timeout --kill-after=1s 10s busctl --user call -- org.kde.kdeconnect "$notification_path" \
+    timeout --kill-after=1s 10s busctl --user call -- "$kdeconnect_service" "$notification_path" \
       org.kde.kdeconnect.device.notifications.notification dismiss >/dev/null 2>&1 || true
   done < <(jq -r '.data[0][]?' <<<"$raw" 2>/dev/null)
 }
@@ -682,7 +823,7 @@ contact_records_json() {
   device_path="/modules/kdeconnect/devices/$device_id"
   contact_dir="${XDG_DATA_HOME:-${HOME:-}/.local/share}/kpeoplevcard/kdeconnect-$device_id"
 
-  timeout --kill-after=1s 10s busctl --user call -- org.kde.kdeconnect "$device_path/contacts" \
+  timeout --kill-after=1s 10s busctl --user call -- "$kdeconnect_service" "$device_path/contacts" \
     org.kde.kdeconnect.device.contacts synchronizeRemoteWithLocal >/dev/null 2>&1 || true
 
   if [[ ! -d $contact_dir || -L $contact_dir ]]; then
@@ -732,7 +873,7 @@ contacts() {
 }
 
 active_conversations_raw() {
-  dbus_bounded 10s busctl --user --json=short call -- org.kde.kdeconnect "$1" \
+  dbus_bounded 10s busctl --user --json=short call -- "$kdeconnect_service" "$1" \
     org.kde.kdeconnect.device.conversations activeConversations
 }
 
@@ -755,7 +896,7 @@ conversations() {
   raw="$(active_conversations_raw "$device_path" 2>/dev/null || true)"
   for attempt in $(seq 1 20); do
     if [[ -n $raw && $requested == 0 ]]; then
-      timeout --kill-after=1s 10s busctl --user call -- org.kde.kdeconnect "$device_path" \
+      timeout --kill-after=1s 10s busctl --user call -- "$kdeconnect_service" "$device_path" \
         org.kde.kdeconnect.device.conversations requestAllConversationThreads \
         >/dev/null 2>&1 || true
       requested=1
@@ -1029,7 +1170,8 @@ open_attachment() {
 reply() {
   local device_id="${1:-}" thread_id="${2:-}" message="${3:-}"
   [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ && $thread_id =~ ^[0-9]+$ && -n $message ]] || usage
-  timeout --kill-after=1s 10s busctl --user call -- org.kde.kdeconnect \
+  require_messaging_capability "$device_id" kdeconnect_sms || return 1
+  timeout --kill-after=1s 10s busctl --user call -- "$kdeconnect_service" \
     "/modules/kdeconnect/devices/$device_id" \
     org.kde.kdeconnect.device.conversations replyToConversation \
     xsav "$thread_id" "$message" 0 >/dev/null
@@ -1082,6 +1224,9 @@ send_sms() {
   local device_id="${1:-}" destination="${2:-}" message="${3:-}" digits
   digits="${destination//[^0-9]/}"
   [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ && $destination =~ ^[+0-9().[:space:]-]+$ && ${#digits} -ge 3 && -n $message ]] || usage
+  require_messaging_capability "$device_id" kdeconnect_sms || return 1
+  # The CLI resolves the well-known owner itself. A restart after preflight can
+  # still race this call; a failure remains an unknown outcome, never a retry.
   timeout --kill-after=1s 10s kdeconnect-cli --device "$device_id" --send-sms "$message" --destination "$destination"
 }
 
@@ -1103,7 +1248,7 @@ done
 # multiply a five-second wait by every field of every notification.
 if [[ ${OMALINK_TIMED:-} != 1 ]]; then
   case "${1:-}" in
-    status | conversations | dismiss-all)
+    status | diagnostics | conversations | dismiss-all)
       export OMALINK_TIMED=1
       exec timeout --kill-after=2s 45s "$0" "${original_args[@]}"
       ;;
@@ -1112,6 +1257,7 @@ fi
 
 case "${1:-}" in
   status) status ;;
+  diagnostics) status true ;;
   watch) watch ;;
   _posted) shift; handle_posted "${1:-}" "${2:-}" ;;
   media) shift; media "${1:-}" ;;

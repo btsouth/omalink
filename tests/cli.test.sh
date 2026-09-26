@@ -8,13 +8,14 @@ trap 'rm -rf "$temp_dir"' EXIT
 
 cat >"$temp_dir/kdeconnect-cli" <<'EOF'
 #!/usr/bin/env bash
-if [[ ${1:-} == --list-available ]]; then
+if [[ ${1:-} == --version ]]; then printf 'kdeconnect-cli 26.08.1\n'; exit 0; fi
+if [[ ${1:-} == --list-devices ]]; then
   [[ -z ${OMALINK_TEST_DISCOVERY_FAIL:-} ]] || exit 1
   [[ -z ${OMALINK_TEST_DISCOVERY_EMPTY:-} ]] || exit 0
   if [[ -n ${OMALINK_TEST_EXTRA_DEVICE:-} ]]; then
-    printf '%s\n' 'abc123 Pixel 9' 'def456 Galaxy S25' '../bad Injected'
+    printf '%s\n' 'abc123' 'def456' '../bad'
   else
-    printf '%s\n' 'abc123 Pixel 9' 'def456 Galaxy S25'
+    printf '%s\n' 'abc123' 'def456'
   fi
   exit 0
 fi
@@ -45,6 +46,9 @@ chmod +x "$temp_dir/kdeconnect-cli"
 cat >"$temp_dir/busctl" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$0.all.log"
+if [[ " $* " == *" GetNameOwner "* ]]; then printf '%s\n' '{"type":"s","data":[":1.99"]}'; exit 0; fi
+if [[ " $* " == *" loadedPlugins "* ]]; then printf '%s\n' '{"type":"as","data":[["kdeconnect_sms","kdeconnect_notifications"]]}'; exit 0; fi
+if [[ " $* " == *" isPluginEnabled "* ]]; then printf '%s\n' '{"type":"b","data":[true]}'; exit 0; fi
 if [[ " $* " == *" requestConversation "* || " $* " == *" replyToConversation "* || " $* " == *" sendReply "* || " $* " == *" requestAttachmentFile "* ]]; then
   exit 0
 fi
@@ -71,6 +75,10 @@ if [[ " $* " == *" sendAction "* ]]; then echo "sendAction $*" >>"$0.log"; exit 
 if [[ " $* " == *" Set ssv "* ]]; then echo "setVolume $*" >>"$0.log"; exit 0; fi
 if [[ " $* " == *"mprisremote seek "* ]]; then echo "seek $*" >>"$0.log"; exit 0; fi
 case "${*: -1}" in
+  name) if [[ " $* " == *"/abc123 "* ]]; then printf 's "Pixel 9"\n'; else printf 's "Galaxy S25"\n'; fi ;;
+  type) printf 's "phone"\n' ;;
+  isPaired|isReachable) printf 'b true\n' ;;
+  supportedPlugins) printf '%s\n' '{"type":"as","data":["kdeconnect_sms","kdeconnect_notifications"]}' ;;
   charge) if [[ -n ${OMALINK_TEST_JUNK:-} ]]; then printf '%s\n' 'i lots'; else printf '%s\n' 'i 71'; fi ;;
   isCharging) if [[ -n ${OMALINK_TEST_JUNK:-} ]]; then printf '%s\n' 'b maybe'; else printf '%s\n' 'b false'; fi ;;
   cellularNetworkStrength) printf '%s\n' 'i 3' ;;
@@ -330,7 +338,7 @@ fi
 empty_status="$(OMALINK_TEST_DISCOVERY_EMPTY=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" status)"
 [[ $(jq -r '.ok' <<<"$empty_status") == true && $(jq '.devices | length' <<<"$empty_status") == 0 ]]
 junk_status="$(OMALINK_TEST_JUNK=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" status)"
-jq -e '.devices[0].battery.charge == null and .devices[0].battery.charging == false
+jq -e '.devices[0].battery.charge == null and .devices[0].battery.charging == null
   and .devices[0].media.volume == 0 and .devices[0].media.isPlaying == false
   and (.devices[0].notifications | length) == 3' <<<"$junk_status" >/dev/null
 injected_status="$(OMALINK_TEST_EXTRA_DEVICE=1 PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" status)"

@@ -1,5 +1,9 @@
 function defaultStatus() {
   return {
+    schemaVersion: 0,
+    observedAt: 0,
+    discoveryTruncated: false,
+    backend: {name: "kdeconnect", available: false, version: null, versionSource: "kdeconnect-cli"},
     ok: true,
     installed: false,
     devices: [],
@@ -15,13 +19,23 @@ function parseStatus(raw) {
     var parsed = JSON.parse(text)
     if (!parsed || Array.isArray(parsed) || typeof parsed !== "object"
         || typeof parsed.ok !== "boolean" || typeof parsed.installed !== "boolean"
-        || !Array.isArray(parsed.devices)) throw new Error("Invalid status")
+        || !Array.isArray(parsed.devices) || parsed.schemaVersion !== 1
+        || !validBackend(parsed.backend) || !validObservation(parsed.observedAt)
+        || typeof parsed.discoveryTruncated !== "boolean") throw new Error("Invalid status")
+    if (parsed.backend.available && (!parsed.ok || !parsed.installed || parsed.observedAt === 0))
+      throw new Error("Contradictory backend status")
     var ids = []
     parsed.devices = parsed.devices.filter(function(device) {
       if (!device || !validDeviceId(device.id) || typeof device.name !== "string"
           || ids.indexOf(device.id) !== -1 || ids.length >= 8) return false
       ids.push(device.id)
       device.name = device.name.slice(0, 256)
+      device.backendAvailable = parsed.backend.available === true
+      device.paired = nullableBoolean(device.paired)
+      device.reachable = nullableBoolean(device.reachable)
+      device.type = deviceType(device.type)
+      device.connectionState = connectionState(device)
+      device.capabilities = normalizedCapabilities(device)
       return true
     })
     return parsed
@@ -48,8 +62,109 @@ function selectedDeviceId(devices, preferredId) {
   // A missing selected phone remains selected. Never choose another phone just
   // because it became the only reachable one or discovery reordered the list.
   if (validDeviceId(preferredId)) return preferredId
-  return Array.isArray(devices) && devices.length === 1 && validDeviceId(devices[0].id)
-    ? devices[0].id : ""
+  var paired = Array.isArray(devices) ? devices.filter(function(device) { return device && device.paired === true }) : []
+  return paired.length === 1 && validDeviceId(paired[0].id) ? paired[0].id : ""
+}
+
+var capabilityPlugins = {
+  messaging: "kdeconnect_sms", contacts: "kdeconnect_contacts", notifications: "kdeconnect_notifications",
+  sharing: "kdeconnect_share", clipboard: "kdeconnect_clipboard", ring: "kdeconnect_findmyphone",
+  media: "kdeconnect_mprisremote", battery: "kdeconnect_battery", files: "kdeconnect_sftp",
+  connectivity: "kdeconnect_connectivity_report"
+}
+
+function nullableBoolean(value) { return typeof value === "boolean" ? value : null }
+function deviceType(value) {
+  return ["phone", "tablet", "desktop", "laptop", "tv"].indexOf(value) !== -1 ? value : "unknown"
+}
+function validObservation(value) {
+  return typeof value === "number" && isFinite(value) && value >= 0 && value <= 9007199254740991
+    && Math.floor(value) === value
+}
+function validBackend(value) {
+  return !!value && value.name === "kdeconnect" && typeof value.available === "boolean"
+    && value.versionSource === "kdeconnect-cli" && (value.version === null
+      || (typeof value.version === "string" && /^[0-9]{1,4}\.[0-9]{1,4}(\.[0-9]{1,6})?([-+][A-Za-z0-9][A-Za-z0-9._+-]{0,31})?$/.test(value.version)))
+}
+function connectionState(device) {
+  if (device.paired === false) return "unpaired"
+  if (device.reachable === false) return "offline"
+  return device.paired === true && device.reachable === true ? "ready" : "unknown"
+}
+function deviceReady(device) {
+  return !!device && device.backendAvailable === true && device.paired === true && device.reachable === true
+}
+function capabilityReason(device, key) {
+  if (!device || device.backendAvailable !== true) return "backend-unavailable"
+  if (device.paired === false) return "unpaired"
+  if (device.reachable === false) return "offline"
+  if (device.paired !== true || device.reachable !== true) return "connection-unknown"
+  var capability = device.capabilities && Object.prototype.hasOwnProperty.call(capabilityPlugins, key)
+    ? device.capabilities[key] : null
+  if (!capability || capability.plugin !== capabilityPlugins[key]) return "capability-unknown"
+  if (capability.supported === false) return "not-supported"
+  if (capability.enabled === false) return "plugin-disabled"
+  if (capability.supported === true && capability.enabled === true && capability.loaded === true) return "plugin-ready"
+  if (capability.loaded === false) return "plugin-not-loaded"
+  return "capability-unknown"
+}
+function capabilityState(device, key) {
+  var reason = capabilityReason(device, key)
+  return reason === "plugin-ready" ? "available" : reason === "not-supported" ? "unsupported"
+    : reason === "plugin-disabled" ? "disabled" : "unknown"
+}
+function capabilityAvailable(device, key) { return capabilityState(device, key) === "available" }
+function normalizedCapabilities(device) {
+  var result = {}
+  Object.keys(capabilityPlugins).forEach(function(key) {
+    var raw = device.capabilities && device.capabilities[key]
+    var valid = raw && raw.plugin === capabilityPlugins[key]
+    result[key] = {plugin:capabilityPlugins[key], permission:"unknown",
+      supported:nullableBoolean(valid ? raw.supported : null),
+      loaded:nullableBoolean(valid ? raw.loaded : null), enabled:nullableBoolean(valid ? raw.enabled : null)}
+  })
+  var normalized = {paired:device.paired, reachable:device.reachable,
+    backendAvailable:device.backendAvailable, capabilities:result}
+  Object.keys(result).forEach(function(key) {
+    result[key].state = capabilityState(normalized, key)
+    result[key].reason = capabilityReason(normalized, key)
+  })
+  return result
+}
+
+function parseDiagnostics(raw) {
+  if (typeof raw !== "string" || raw.length > 65536) return null
+  try {
+    var parsed = JSON.parse(raw)
+    if (!parsed || parsed.schemaVersion !== 1 || typeof parsed.ok !== "boolean"
+        || typeof parsed.installed !== "boolean" || !validBackend(parsed.backend)
+        || !validObservation(parsed.observedAt) || typeof parsed.discoveryTruncated !== "boolean"
+        || !Array.isArray(parsed.devices) || parsed.devices.length > 8) return null
+    if (parsed.backend.available && (!parsed.ok || !parsed.installed || parsed.observedAt === 0)) return null
+    var failureReason = null
+    if (!parsed.ok) {
+      if (parsed.backend.available || ["backend-unavailable", "discovery-failed", "backend-restarted"].indexOf(parsed.failureReason) === -1) return null
+      failureReason = parsed.failureReason
+    }
+    var devices = []
+    for (var i = 0; i < parsed.devices.length; i++) {
+      var device = parsed.devices[i]
+      if (!device || device.label !== "device-" + (i + 1)
+          || (device.paired !== null && typeof device.paired !== "boolean")
+          || (device.reachable !== null && typeof device.reachable !== "boolean")) return null
+      var safe = {label:device.label, type:deviceType(device.type), paired:device.paired,
+        reachable:device.reachable, backendAvailable:parsed.backend.available,
+        capabilities:device.capabilities}
+      safe.connectionState = connectionState(safe)
+      safe.capabilities = normalizedCapabilities(safe)
+      delete safe.backendAvailable
+      devices.push(safe)
+    }
+    return {schemaVersion:1, ok:parsed.ok, failureReason:failureReason, installed:parsed.installed, observedAt:parsed.observedAt,
+      discoveryTruncated:parsed.discoveryTruncated,
+      backend:{name:"kdeconnect",available:parsed.backend.available,
+        version:parsed.backend.version,versionSource:"kdeconnect-cli"}, devices:devices}
+  } catch (error) { return null }
 }
 
 function deviceSummary(devices) {
@@ -457,6 +572,11 @@ function relativeTime(timestamp, now) {
 
 if (typeof module !== "undefined") {
   module.exports = {
+    deviceReady: deviceReady,
+    capabilityState: capabilityState,
+    capabilityReason: capabilityReason,
+    capabilityAvailable: capabilityAvailable,
+    parseDiagnostics: parseDiagnostics,
     validDeviceId: validDeviceId,
     deviceById: deviceById,
     selectedDeviceId: selectedDeviceId,
