@@ -23,6 +23,16 @@ Panel {
   readonly property color iconColor: phone.connected ? foreground : dim
   readonly property var notifications: phone.canUseCapability(activePhoneId, "notifications") && phone.selectedDevice && Array.isArray(phone.selectedDevice.notifications)
     ? Model.visibleNotifications(phone.selectedDevice.notifications, phone.notifySources) : []
+  readonly property bool panelContentHidden: settings.panelContent !== undefined
+    && String(settings.panelContent) !== "Show"
+  onPanelContentHiddenChanged: {
+    if (panelContentHidden) {
+      notifReplyId = ""
+      notifReplyDeviceId = ""
+      notifReplyTitle = ""
+      if (notifReplyField) notifReplyField.text = ""
+    }
+  }
   property string shareDeviceId: ""
   property string shareDeviceName: ""
   property string notifReplyId: ""
@@ -799,6 +809,7 @@ Panel {
   
             TextField {
               id: shareField
+              objectName: "shareTextField"
               Layout.fillWidth: true
               placeholderText: "Text or https://…"
               foreground: root.foreground
@@ -828,6 +839,16 @@ Panel {
           }
         }
   
+        Text {
+          visible: root.panelContentHidden
+          Layout.fillWidth: true
+          text: qsTr("Message previews and notification contents are hidden. Counts remain visible. Open Messages to read a conversation, or change Panel message content in widget settings.")
+          wrapMode: Text.Wrap
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+
         RowLayout {
           visible: root.unreadConversations.length > 0
           Layout.fillWidth: true
@@ -844,6 +865,7 @@ Panel {
   
           Button {
             text: "Clear"
+            visible: !root.panelContentHidden
             foreground: root.foreground
             fontFamily: root.fontFamily
             onClicked: root.markSeenEntries(root.unreadConversations)
@@ -851,14 +873,15 @@ Panel {
         }
   
         ListView {
-          visible: root.unreadConversations.length > 0
+          objectName: "unreadContentList"
+          visible: !root.panelContentHidden && root.unreadConversations.length > 0
           Layout.fillWidth: true
           Layout.preferredHeight: Math.min(contentHeight, Style.space(150))
           clip: true
           spacing: Style.space(6)
           boundsBehavior: Flickable.StopAtBounds
           interactive: contentHeight > height
-          model: root.unreadConversations
+          model: root.panelContentHidden ? [] : root.unreadConversations
   
           Controls.ScrollBar.vertical: Controls.ScrollBar { policy: Controls.ScrollBar.AsNeeded }
   
@@ -940,6 +963,7 @@ Panel {
   
           Button {
             text: "Clear all"
+            visible: !root.panelContentHidden
             foreground: root.foreground
             fontFamily: root.fontFamily
             onClicked: phone.dismissAllNotifications(root.activePhoneId)
@@ -947,14 +971,15 @@ Panel {
         }
   
         ListView {
-          visible: root.notifications.length > 0
+          objectName: "notificationContentList"
+          visible: !root.panelContentHidden && root.notifications.length > 0
           Layout.fillWidth: true
           Layout.preferredHeight: Math.min(contentHeight, Style.space(190))
           clip: true
           spacing: Style.space(6)
           boundsBehavior: Flickable.StopAtBounds
           interactive: contentHeight > height
-          model: root.notifications
+          model: root.panelContentHidden ? [] : root.notifications
   
           Controls.ScrollBar.vertical: Controls.ScrollBar { policy: Controls.ScrollBar.AsNeeded }
   
@@ -1074,7 +1099,7 @@ Panel {
       }
 
       ColumnLayout {
-        visible: root.notifReplyId !== ""
+        visible: !root.panelContentHidden && root.notifReplyId !== ""
         Layout.fillWidth: true
         spacing: Style.space(6)
 
@@ -1092,23 +1117,24 @@ Panel {
 
           TextField {
             id: notifReplyField
+            objectName: "notificationReplyField"
             Layout.fillWidth: true
             placeholderText: "Reply"
             foreground: root.foreground
             font.family: root.fontFamily
-            onAccepted: if (text.trim() !== "" && !phone.actionBusy && phone.canUseCapability(root.notifReplyDeviceId, "notifications")) {
+            onAccepted: if (!root.panelContentHidden && text.trim() !== "" && !phone.actionBusy && phone.canUseCapability(root.notifReplyDeviceId, "notifications")) {
               if (phone.replyToNotification(root.notifReplyDeviceId, root.notifReplyId, text)) root.notifReplyId = ""
             }
           }
 
           Button {
             text: "Send"
-            enabled: notifReplyField.text.trim() !== "" && !phone.actionBusy && phone.canUseCapability(root.notifReplyDeviceId, "notifications")
+            enabled: !root.panelContentHidden && notifReplyField.text.trim() !== "" && !phone.actionBusy && phone.canUseCapability(root.notifReplyDeviceId, "notifications")
             foreground: root.foreground
             fontFamily: root.fontFamily
             bordered: true
             onClicked: {
-              if (phone.replyToNotification(root.notifReplyDeviceId, root.notifReplyId, notifReplyField.text)) root.notifReplyId = ""
+              if (!root.panelContentHidden && phone.replyToNotification(root.notifReplyDeviceId, root.notifReplyId, notifReplyField.text)) root.notifReplyId = ""
             }
           }
 

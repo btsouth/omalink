@@ -377,6 +377,19 @@ real-desktop/hardware participation. Mocks establish contracts, not compatibilit
 
 ### PR 9: usable notification policy
 
+Initial privacy slice: `Panel message content: Hide` removes unread and notification
+rows and their reply controls, clears an unsent notification reply, and retains
+counts. It does not change backend reads, explicitly opened Messages or other
+applications. Popup control remains independent. Android hardware is available
+for eventual acceptance; no iPhone hardware is currently available.
+
+Per-app controls still require bounded metadata discovery before helper filtering,
+exact validated package identities (with clearly labeled app-name fallback), and
+endpoint-scoped overrides shared by status, popup workers and dismiss-all. Keep
+legacy source strings intact and invalidate in-flight reads on policy changes.
+The discovery view must disclose scan limits rather than imply an installed-app
+inventory.
+
 - [ ] List observed app identities with per-app enable/mute rather than requiring
   substring editing. Preserve a compatible migration for existing filter strings.
 - [ ] Add filtered-empty explanations, temporary presentation mode and optional

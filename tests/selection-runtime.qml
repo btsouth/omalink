@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell
+import qs.Commons
 import "." as Plugin
 import "Model.js" as Model
 
@@ -14,6 +15,24 @@ ShellRoot {
   readonly property var second: ({id:"def456",name:"Galaxy",notifications:[{id:"same",appName:"Messages",text:"Galaxy message",isConversation:false,replyable:false,dismissable:false}]})
   function check(condition, message) {
     if (!condition) { console.error("FAIL: " + message); Qt.quit(); throw new Error(message) }
+  }
+  function named(item, name, depth) {
+    if (!item || depth > 30) return null
+    if (item.objectName === name) return item
+    var children = item.data || item.children || []
+    for (var i = 0; i < children.length; i++) {
+      var found = named(children[i], name, depth + 1)
+      if (found) return found
+    }
+    if (item.contentItem) {
+      if (item.contentItem.length !== undefined) {
+        for (var c = 0; c < item.contentItem.length; c++) {
+          var content = named(item.contentItem[c], name, depth + 1)
+          if (content) return content
+        }
+      } else return named(item.contentItem, name, depth + 1)
+    }
+    return null
   }
   function status(devices) {
     var normalized = devices.map(function(device) {
@@ -45,8 +64,8 @@ ShellRoot {
   QtObject {
     id: fakeBar
     property QtObject shell: fakeShell
-    property color foreground: "white"
-    property color barForeground: "white"
+    property color foreground: Color.foreground
+    property color barForeground: Color.foreground
     property color urgent: "red"
     property string fontFamily: "monospace"
     property int height: 30
@@ -54,11 +73,30 @@ ShellRoot {
     property bool vertical: false
     property bool foregroundAnimationEnabled: false
     property string position: "top"
+    property var activePopout: false
+    function requestPopout(item) { activePopout = item }
+    function releasePopout(item) { activePopout = false }
     function hideTooltip(item) {}
   }
-  Plugin.Panel { id: panel; manageIpc: false; bar: fakeBar }
+  PanelWindow {
+    visible: Quickshell.env("OMALINK_PREVIEW") !== ""
+    implicitWidth: 400; implicitHeight: 35
+    anchors { top: true; left: true }
+    Plugin.Panel { id: panel; manageIpc: false; bar: fakeBar }
+  }
   // A second instance models a shell reload with the persisted settings.
   Component { id: restoredPanel; Plugin.Panel { manageIpc: false; bar: fakeBar } }
+
+  Timer {
+    interval: 500
+    running: panel.opened && Quickshell.env("OMALINK_PREVIEW") !== ""
+    repeat: true
+    onTriggered: {
+      test.phone.applyStatus(test.status([test.first]))
+      panel.unreadRaw = [{threadId:7,names:["Synthetic sender"],preview:"Synthetic preview",timestamp:1000,unread:true}]
+      panel.seenMap = ({})
+    }
+  }
 
   Timer {
     interval: 750
@@ -194,7 +232,17 @@ ShellRoot {
         test.check(test.phone.installed && !panel.activePhoneReady, "missing daemon hid installed manager or allowed actions")
         test.phone.applyStatus(test.status([test.first]))
         panel.selectDevice("abc123")
-        test.check(test.phone.shareText("abc123", "  exact 😀  ") === true, "share start rejected")
+        var originalSettings = panel.settings
+        var shareHidden = JSON.parse(JSON.stringify(originalSettings))
+        shareHidden.panelContent = "Hide"
+        panel.settings = shareHidden
+        panel.shareDeviceId = "abc123"
+        var shareInput = test.named(panel, "shareTextField", 0)
+        test.check(shareInput !== null, "share field missing")
+        shareInput.text = "  exact 😀  "
+        shareInput.accepted()
+        test.check(test.phone.actionBusy, "hiding notification content blocked share Enter")
+        panel.settings = originalSettings
         test.check(test.phone.actionBusy, "share did not synchronously block duplicate action")
         test.check(test.phone.shareText("abc123", "duplicate") === false, "duplicate share accepted")
       } else if (test.step === 6) {
@@ -205,6 +253,43 @@ ShellRoot {
         test.check(test.phone.replyToNotification("abc123", "reply-id", "duplicate") === false, "duplicate reply accepted")
       } else if (test.step === 7) {
         test.check(!test.phone.actionBusy, "notification reply remained busy")
+        test.phone.applyStatus(test.status([test.first]))
+        test.check(!panel.panelContentHidden, "legacy settings unexpectedly hide content")
+        var notifications = test.named(panel, "notificationContentList", 0)
+        var unread = test.named(panel, "unreadContentList", 0)
+        var reply = test.named(panel, "notificationReplyField", 0)
+        test.check(notifications && unread && reply, "privacy controls missing from actual Panel")
+        panel.unreadRaw = [{threadId:7,names:["private sender"],preview:"private preview",timestamp:1000,unread:true}]
+        panel.seenMap = ({})
+        panel.notifReplyId = "pending"
+        panel.notifReplyTitle = "private sender"
+        panel.notifReplyDeviceId = "abc123"
+        reply.text = "unsent private reply"
+        var hidden = JSON.parse(JSON.stringify(panel.settings))
+        hidden.panelContent = "Hide"
+        panel.settings = hidden
+        test.check(panel.panelContentHidden && panel.notifications.length === 1, "privacy hid counts or failed to enable")
+        test.check(notifications.model.length === 0 && unread.model.length === 0, "hidden content remained in delegate models")
+        test.check(!notifications.visible && !unread.visible, "private lists stayed visible")
+        test.check(panel.notifReplyId === "" && panel.notifReplyTitle === "" && panel.notifReplyDeviceId === "" && reply.text === "", "privacy retained an unsent reply")
+        if (Quickshell.env("OMALINK_PREVIEW") === "hidden") {
+          panel.open()
+          stop()
+          return
+        }
+        var reloaded = restoredPanel.createObject(panel, {settings:hidden})
+        test.check(reloaded.panelContentHidden, "hidden preference lost on reload")
+        reloaded.destroy()
+        var shown = JSON.parse(JSON.stringify(hidden))
+        shown.panelContent = "Show"
+        panel.settings = shown
+        test.check(notifications.model.length === 1 && unread.model.length === 1, "show did not restore current content")
+        test.check(reply.text === "" && panel.notifReplyId === "", "show restored discarded draft")
+        if (Quickshell.env("OMALINK_PREVIEW") === "shown") {
+          panel.open()
+          stop()
+          return
+        }
         console.log("omalink selection runtime tests passed")
         Qt.quit()
       }

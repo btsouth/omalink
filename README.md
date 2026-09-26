@@ -228,6 +228,13 @@ package), or clear the field to allow every notification. **Notification
 popups** can be set to Off to keep matching notifications listed in the panel
 without desktop popups.
 
+Set **Panel message content** to **Hide** to remove unread message previews and
+notification rows from the panel, including app names, icons and reply controls.
+Counts remain visible. Changing to Hide clears an unsent panel notification reply.
+This is a display preference: existing bounded reads still run, Messages opened
+explicitly can show conversations, and KDE Connect or other apps are unaffected.
+Use **Notification popups: Off** separately to suppress OmaLink's app-name popups.
+
 ## Security and local data
 
 Phone notifications, media metadata, contact records, and attachments are

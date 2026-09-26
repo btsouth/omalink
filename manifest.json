@@ -25,7 +25,8 @@
       "notifyApps": "Messages, Messaging, Authenticator, WhatsApp, MMS",
       "notifyPopups": "On",
       "mediaControls": "On",
-      "blueFerryHistory": "Off"
+      "blueFerryHistory": "Off",
+      "panelContent": "Show"
     },
     "schema": [
       {
@@ -76,6 +77,17 @@
         ],
         "defaultValue": "Off",
         "description": "View local iPhone history and cached contacts from an already running BlueFerry backend. Read-only; does not install, start or configure BlueFerry."
+      },
+      {
+        "key": "panelContent",
+        "type": "enum",
+        "label": "Panel message content",
+        "options": [
+          "Show",
+          "Hide"
+        ],
+        "defaultValue": "Show",
+        "description": "Hide unread message previews and notification contents in the panel. Counts remain visible. Messages opened explicitly and other apps are unaffected."
       }
     ]
   }
