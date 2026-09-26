@@ -2,6 +2,11 @@
 
 ## 0.3.0 - Unreleased
 
+- Show submitting, accepted, matching-history, unconfirmed and not-submitted
+  message states. Bound reconciliation, retain uncertain text for editing, and
+  never retry a send automatically or label command acceptance as delivery.
+- Keep pending message state scoped to its original phone and conversation.
+  Distinguish provisional conversations and ignore failed or stale history reads.
 - Remember the selected phone for messages and notifications. Discovery order
   and disconnects no longer switch those workflows to another phone.
 - Keep the selected phone's name visible while unavailable, pause actions after

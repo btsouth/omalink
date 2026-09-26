@@ -5,7 +5,7 @@ project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin"
-cp "$project_dir"/*.qml "$project_dir/Model.js" "$work/"
+cp "$project_dir"/*.qml "$project_dir"/*.js "$work/"
 ln -s /usr/share/omarchy/shell/Commons "$work/Commons"
 ln -s /usr/share/omarchy/shell/Ui "$work/Ui"
 cat >"$work/bin/omalink" <<'EOF'

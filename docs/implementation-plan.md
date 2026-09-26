@@ -166,16 +166,16 @@ Real phones, screen-reader acceptance and high scaling remain unverified.
 Touch `Messages.qml`, pure send-state functions in `Model.js` or a small new
 model module, helper error/result output, and tests. Do not add new transports.
 
-- [ ] Introduce the explicit send state machine above and operation IDs.
-- [ ] Treat successful command submission as backend acceptance, not delivery.
+- [x] Introduce the explicit send state machine above and operation IDs.
+- [x] Treat successful command submission as backend acceptance, not delivery.
   Only backend/history evidence can advance the visible confirmation state.
-- [ ] Give bounded reconciliation a terminal unconfirmed state. Preserve the
+- [x] Give bounded reconciliation a terminal unconfirmed state. Preserve the
   text for inspection or intentional resend; explain possible duplication.
-- [ ] Keep definitively failed input editable. Never silently resend after
+- [x] Keep definitively failed input editable. Never silently resend after
   reconnect, restart, timeout, selection change or transport change.
-- [ ] Distinguish cancellation before dispatch from stopping observation after
+- [x] Distinguish cancellation before dispatch from stopping observation after
   dispatch. The latter does not claim to cancel the phone's send.
-- [ ] Keep pending-send state scoped to its original endpoint/thread. When the
+- [x] Keep pending-send state scoped to its original endpoint/thread. When the
   message window closes, preserve the existing no-persistent-body policy and
   explain that an already submitted send may still finish.
 - [ ] Prefer stdin/private bounded pipes for new content-bearing helper calls.
@@ -185,6 +185,22 @@ Acceptance: success with delayed history, definite rejection, lost response,
 history never arriving, repeated identical messages, window close/reopen,
 disconnect mid-send and late completion. Assert no automatic duplicate calls.
 Only identify delivery/read receipts if the backend really reports them.
+
+Implemented in a separate messaging slice. Nonzero transport exits are
+conservatively unconfirmed because the helper cannot prove non-dispatch; only
+local validation establishes not submitted. Reconciliation is bounded to six
+extra reads and a 30-second observation window. Exact text/time matching also
+requires a previously loaded thread snapshot and rejects prior/future records;
+it is correlation, not backend message identity or a delivery receipt. New or
+unviewed threads can remain unconfirmed. An identical concurrent send made on
+the phone remains ambiguous, so the UI says a matching message was found.
+
+Pure-model and actual-QML regression coverage includes prior identical messages,
+missing snapshots, reused history records, two provisional recipients, editing
+while another thread loads, partial failed reads, uncertainty, preserved text,
+exact Unicode contents and late completion after close/reopen. New observations
+remain in memory; content-bearing legacy helper arguments are not migrated yet.
+Physical delivery, screen-reader acceptance and complete translation remain open.
 
 ### PR 3: capability-aware setup and diagnostics
 

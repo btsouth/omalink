@@ -8,6 +8,7 @@ import Quickshell.Widgets
 import qs.Commons
 import qs.Ui
 import "Model.js" as Model
+import "SendState.js" as SendState
 
 Item {
   id: root
@@ -15,18 +16,22 @@ Item {
   property bool opened: false
   property int generation: 0
   property string deviceId: ""
+  property string deviceName: ""
   property var conversations: []
   property var contacts: []
   property var selectedConversation: null
   property bool composing: false
   property string recipientQuery: ""
   property string recipientNumber: ""
-  property string pendingNewNumber: ""
-  property string pendingNewName: ""
   property string pendingNewBody: ""
-  property var pendingConversation: null
-  property var pendingOutgoing: null
-  property int pendingSyncAttempts: 0
+  property var historyConversations: []
+  property var sendOperations: []
+  property int nextSendId: 0
+  property int sendConfirmationTimeoutMs: 30000
+  property int sendReconcileIntervalMs: 1800
+  readonly property var latestSend: sendOperations.length ? sendOperations[sendOperations.length - 1] : null
+  property alias replyText: replyField.text
+  property alias composeText: composeMessage.text
   property var messages: []
   property var messageCache: ({})
   property var cacheOrder: []
@@ -63,6 +68,7 @@ Item {
     if (sending && nextDeviceId !== deviceId) return
     if (!opened || nextDeviceId !== deviceId) close()
     deviceId = nextDeviceId
+    deviceName = String(payload.deviceName || nextDeviceId).slice(0, 256)
     pendingOpenTitle = String(payload.conversationHint || "")
     pendingOpenThreadId = payload.threadId === undefined || payload.threadId === null
       ? "" : String(payload.threadId)
@@ -79,6 +85,7 @@ Item {
     conversationProcess.running = false
     contactProcess.running = false
     threadProcess.running = false
+    threadProcess.result = null
     attachmentProcess.running = false
     replyField.text = ""
     composeMessage.text = ""
@@ -89,13 +96,12 @@ Item {
     composing = false
     recipientQuery = ""
     recipientNumber = ""
-    pendingNewNumber = ""
-    pendingNewName = ""
     pendingNewBody = ""
-    pendingConversation = null
-    pendingOutgoing = null
-    pendingSyncAttempts = 0
-    refreshAfterNewMessage.stop()
+    historyConversations = []
+    sendOperations = []
+    sendSyncProcess.running = false
+    sendSyncProcess.result = null
+    reconcileSends.stop()
     messages = []
     messageCache = ({})
     cacheOrder = []
@@ -145,30 +151,32 @@ Item {
     var threadId = String(conversation.threadId)
     var changingThread = !selectedConversation
       || String(selectedConversation.threadId) !== threadId
+      || String(selectedConversation.localOperationId || "") !== String(conversation.localOperationId || "")
     selectedConversation = conversation
-    if (changingThread) messages = messageCache[threadId] || []
-    if (pendingOutgoing
-        && (String(conversation.threadId) === String(pendingOutgoing.threadId)
-          || Model.conversationMatchesNumber(conversation, pendingOutgoing.number)))
-      setThreadMessages(threadId, Model.mergePendingOutgoing(
-        messages, pendingOutgoing).messages)
+    if (changingThread) messages = SendState.messages(messageCache[threadId] || [], conversation, sendOperations)
+    if (conversation.threadId === null || conversation.threadId === undefined) {
+      loading = false
+      return
+    }
     loading = messages.length === 0
     loadingThreadId = threadId
     error = ""
     threadProcess.command = [helperPath, "messages", deviceId, threadId]
     threadProcess.generation = generation
+    threadProcess.result = null
     threadProcess.running = true
   }
 
   function setThreadMessages(threadId, nextMessages) {
-    messages = nextMessages
+    var history = SendState.historyOnly(nextMessages)
+    messages = SendState.messages(history, selectedConversation, sendOperations)
     var key = String(threadId)
     var order = cacheOrder.filter(function(item) { return item !== key }).concat([key]).slice(-5)
     var updatedCache = {}
     for (var i = 0; i < order.length; i++) {
       if (order[i] !== key) updatedCache[order[i]] = messageCache[order[i]]
     }
-    updatedCache[key] = nextMessages
+    updatedCache[key] = history
     cacheOrder = order
     messageCache = updatedCache
   }
@@ -200,15 +208,107 @@ Item {
     Qt.callLater(function() { composeMessage.forceActiveFocus() })
   }
 
+  function updateSendOperations(next) {
+    sendOperations = next
+    conversations = SendState.conversations(historyConversations, sendOperations)
+    if (selectedConversation && selectedConversation.localOperationId) {
+      var bound = sendOperations.find(function(item) { return item.id === root.selectedConversation.localOperationId })
+      if (bound && bound.threadId !== "") selectedConversation = bound.conversation
+    }
+    if (selectedConversation)
+      messages = SendState.messages(messageCache[String(selectedConversation.threadId)] || [], selectedConversation, sendOperations)
+  }
+
+  function replaceSend(operation) {
+    updateSendOperations(sendOperations.map(function(item) { return item.id === operation.id ? operation : item }))
+  }
+
+  function observeHistory(threadId, history) {
+    historyConversations = SendState.updateThreadPreview(historyConversations, threadId, history)
+    updateSendOperations(SendState.reconcile(sendOperations, deviceId, threadId, history))
+  }
+
+  function prepareSend(conversation, number, body, valid) {
+    // Drop old confirmations first; unresolved text stays available until close.
+    var retained = SendState.pruneConfirmed(sendOperations)
+    if (retained.length >= 100) {
+      error = "Local send activity is full. Copy any messages you need before closing this window."
+      return null
+    }
+    var threadId = conversation && conversation.threadId !== null ? String(conversation.threadId) : ""
+    var operation = SendState.create(String(++nextSendId), deviceId, conversation, number,
+                                     body, Date.now(), messageCache[threadId])
+    if (!valid) operation.state = "failed"
+    updateSendOperations(retained.concat([operation]))
+    if (!valid) {
+      error = "Check the phone connection, recipient and message length (maximum 8192 characters)."
+      return null
+    }
+    return operation
+  }
+
+  function finishSend(operationId, exitCode) {
+    var operation = sendOperations.find(function(item) { return item.id === operationId })
+    if (!operation) return
+    replaceSend(SendState.finish(operation, exitCode, Date.now(), sendConfirmationTimeoutMs))
+    if (exitCode === 0) reconcileSends.start()
+  }
+
+  function reconcileNextSend() {
+    updateSendOperations(SendState.expire(sendOperations, Date.now()))
+    var pending = sendOperations.filter(function(item) { return item.state === "accepted" })
+    if (pending.length === 0) {
+      reconcileSends.stop()
+      sendSyncProcess.running = false
+      return
+    }
+    if (sendSyncProcess.running) return
+    // Round-robin reads prevent a slow/new thread starving another send.
+    pending.sort(function(left, right) { return left.attempts - right.attempts })
+    var operation = Object.assign({}, pending[0])
+    operation.attempts++
+    replaceSend(operation)
+    sendSyncProcess.operationId = operation.id
+    sendSyncProcess.threadId = operation.threadId
+    sendSyncProcess.generation = generation
+    sendSyncProcess.result = null
+    sendSyncProcess.command = operation.threadId === ""
+      ? [helperPath, "conversations", operation.deviceId]
+      : [helperPath, "messages", operation.deviceId, operation.threadId]
+    sendSyncProcess.running = true
+  }
+
+  function editSend(operation) {
+    if (!operation || !opened || sending || threadProcess.running) return
+    if (operation.threadId !== "" && operation.conversation) {
+      composing = false
+      openThread(operation.conversation)
+      replyField.text = operation.body
+      Qt.callLater(function() { replyField.forceActiveFocus() })
+    } else {
+      startCompose()
+      recipientQuery = operation.number
+      recipientNumber = operation.number
+      composeMessage.text = operation.body
+      Qt.callLater(function() { composeMessage.forceActiveFocus() })
+    }
+  }
+
   function sendNewMessage() {
     var destination = recipientNumber !== "" ? recipientNumber : recipientField.text.trim()
-    var message = composeMessage.text.trim()
-    if (destination === "" || message === "" || sending) return
+    var message = composeMessage.text
+    if (destination === "" || message.trim() === "" || sending || !opened) return
+    var conversation = SendState.exactConversation(historyConversations, destination)
+      || {threadId: null, addresses: [destination], names: [recipientNumber !== "" ? recipientQuery : destination]}
+    var valid = /^[A-Za-z0-9]{1,128}$/.test(deviceId)
+      && /^[+0-9().\s-]+$/.test(destination) && destination.replace(/[^0-9]/g, "").length >= 3
+      && message.length <= 8192
+    var operation = prepareSend(conversation, destination, message, valid)
+    if (!operation) return
     sending = true
-    pendingNewNumber = destination
-    pendingNewName = recipientNumber !== "" ? recipientQuery : destination
     pendingNewBody = message
     error = ""
+    newMessageProcess.operationId = operation.id
     newMessageProcess.command = [helperPath, "sms", deviceId, destination, message]
     newMessageProcess.generation = generation
     newMessageProcess.running = true
@@ -262,13 +362,19 @@ Item {
   }
 
   function sendReply() {
-    var message = replyField.text.trim()
-    if (!selectedConversation || message === "" || sending) return
+    var message = replyField.text
+    if (!selectedConversation || message.trim() === "" || sending || !opened) return
+    var threadId = selectedConversation.threadId
+    var valid = /^[A-Za-z0-9]{1,128}$/.test(deviceId) && threadId !== null
+      && /^[0-9]+$/.test(String(threadId)) && message.length <= 8192
+    var operation = prepareSend(selectedConversation, "", message, valid)
+    if (!operation) return
     sending = true
     pendingReply = message
-    pendingThreadId = String(selectedConversation.threadId)
+    pendingThreadId = String(threadId)
     error = ""
-    replyProcess.command = [helperPath, "reply", deviceId, String(selectedConversation.threadId), message]
+    replyProcess.operationId = operation.id
+    replyProcess.command = [helperPath, "reply", deviceId, String(threadId), message]
     replyProcess.generation = generation
     replyProcess.running = true
   }
@@ -291,17 +397,8 @@ Item {
       onRead: function(text) {
         if (!conversationProcess.current) return
         var fetched = Model.parseConversations(text)
-        if (root.pendingConversation) {
-          var merged = Model.mergePendingConversation(fetched, root.pendingConversation)
-          root.conversations = merged.conversations
-          if (merged.resolved) {
-            root.pendingConversation = null
-            root.pendingSyncAttempts = 0
-            refreshAfterNewMessage.stop()
-          }
-        } else {
-          root.conversations = fetched
-        }
+        root.historyConversations = fetched
+        root.updateSendOperations(SendState.bindThreads(root.sendOperations, fetched))
         if (root.pendingOpenThreadId !== "" || root.pendingOpenTitle !== "") {
           var target = Model.findConversationByThreadId(root.conversations, root.pendingOpenThreadId)
           if (!target && root.pendingOpenTitle !== "")
@@ -336,110 +433,84 @@ Item {
   Process {
     id: newMessageProcess
     property int generation: -1
+    property string operationId: ""
     readonly property bool current: root.opened && generation === root.generation
-    stderr: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: if (newMessageProcess.current && String(text || "").trim() !== "") root.error = "Could not send message"
-    }
     onExited: function(exitCode) {
       root.sending = false
-      if (!newMessageProcess.current) {
-        root.pendingReply = ""
-        root.pendingThreadId = ""
-        root.pendingNewNumber = ""
-        root.pendingNewName = ""
-        root.pendingNewBody = ""
-        return
+      if (!current) { root.pendingNewBody = ""; return }
+      root.finishSend(operationId, exitCode)
+      if (exitCode === 0 && root.composing && composeMessage.text === root.pendingNewBody) {
+        root.composing = false
+        root.recipientQuery = ""
+        root.recipientNumber = ""
+        composeMessage.text = ""
       }
-      if (exitCode !== 0) {
-        root.pendingNewNumber = ""
-        root.pendingNewName = ""
-        root.pendingNewBody = ""
-        root.error = "Could not send message"
-        return
-      }
-      var sentAt = Date.now()
-      root.conversations = Model.upsertConversationAfterSms(
-        root.conversations,
-        root.pendingNewNumber,
-        root.pendingNewName,
-        root.pendingNewBody,
-        sentAt)
-      root.pendingConversation = root.conversations[0]
-      root.pendingOutgoing = {
-        number: root.pendingNewNumber,
-        body: root.pendingNewBody,
-        timestamp: sentAt,
-        threadId: root.conversations[0].threadId
-      }
-      root.pendingSyncAttempts = 0
-      root.composing = false
-      root.recipientQuery = ""
-      root.recipientNumber = ""
-      root.pendingNewNumber = ""
-      root.pendingNewName = ""
       root.pendingNewBody = ""
-      composeMessage.text = ""
-      refreshAfterNewMessage.start()
     }
   }
 
   Timer {
-    id: refreshAfterNewMessage
-    interval: 1800
+    id: reconcileSends
+    interval: root.sendReconcileIntervalMs
     repeat: true
-    onTriggered: {
-      root.pendingSyncAttempts++
-      root.refreshConversations()
-      if (!root.pendingConversation || root.pendingSyncAttempts >= 6) stop()
+    onTriggered: root.reconcileNextSend()
+  }
+
+  Process {
+    id: sendSyncProcess
+    property int generation: -1
+    property string operationId: ""
+    property string threadId: ""
+    property var result: null
+    readonly property bool current: root.opened && generation === root.generation
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        if (!sendSyncProcess.current) return
+        try {
+          var parsed = JSON.parse(String(text))
+          if (Array.isArray(parsed)) sendSyncProcess.result = parsed
+        } catch (parseError) { /* A failed read is not empty phone history. */ }
+      }
+    }
+    onExited: function(exitCode) {
+      if (!current) return
+      if (exitCode === 0 && result !== null) {
+        if (threadId === "") {
+          root.historyConversations = result
+          root.updateSendOperations(SendState.bindThreads(root.sendOperations, result))
+        } else {
+          root.observeHistory(threadId, result)
+          if (root.selectedConversation && String(root.selectedConversation.threadId) === threadId
+              && (result.length > 0 || root.messages.length === 0))
+            root.setThreadMessages(threadId, result)
+        }
+      }
+      result = null
+      // Every send receives at most six explicit reconciliation reads.
+      root.updateSendOperations(root.sendOperations.map(function(item) {
+        if (item.id !== sendSyncProcess.operationId || item.state !== "accepted" || item.attempts < 6) return item
+        var expired = Object.assign({}, item)
+        expired.state = "unconfirmed"
+        return expired
+      }))
     }
   }
 
   Process {
     id: replyProcess
     property int generation: -1
+    property string operationId: ""
     readonly property bool current: root.opened && generation === root.generation
-    stderr: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: if (replyProcess.current && String(text || "").trim() !== "") root.error = "Could not send reply"
-    }
     onExited: function(exitCode) {
       root.sending = false
-      if (!replyProcess.current) {
-        root.pendingReply = ""
-        root.pendingThreadId = ""
-        root.pendingNewNumber = ""
-        root.pendingNewName = ""
-        root.pendingNewBody = ""
-        return
-      }
-      if (exitCode !== 0) {
-        root.pendingReply = ""
-        root.pendingThreadId = ""
-        root.error = "Could not send reply"
-        return
-      }
-      var sentAt = Date.now()
-      var replyConversation = root.selectedConversation
-      root.pendingOutgoing = {
-        number: replyConversation && replyConversation.addresses
-          ? String(replyConversation.addresses[0] || "") : "",
-        body: root.pendingReply,
-        timestamp: sentAt,
-        threadId: root.pendingThreadId
-      }
-      if (replyConversation
-          && String(replyConversation.threadId) === root.pendingThreadId)
-        root.setThreadMessages(root.pendingThreadId, Model.mergePendingOutgoing(
-          root.messages, root.pendingOutgoing).messages)
-      root.conversations = Model.updateConversationAfterSend(
-        root.conversations,
-        root.pendingThreadId,
-        root.pendingReply,
-        sentAt)
+      if (!current) { root.pendingReply = ""; root.pendingThreadId = ""; return }
+      root.finishSend(operationId, exitCode)
+      if (exitCode === 0 && root.selectedConversation
+          && String(root.selectedConversation.threadId) === root.pendingThreadId)
+        replyField.text = ""
       root.pendingReply = ""
       root.pendingThreadId = ""
-      replyField.text = ""
     }
   }
 
@@ -514,33 +585,30 @@ Item {
   Process {
     id: threadProcess
     property int generation: -1
+    property var result: null
     readonly property bool current: root.opened && generation === root.generation
-    stdout: SplitParser {
-      onRead: function(text) {
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
         if (!threadProcess.current) return
-        if (!root.selectedConversation
-            || String(root.selectedConversation.threadId) !== root.loadingThreadId) return
-        var fetched = Model.parseMessages(text)
-        if (fetched.length === 0 && root.messages.length > 0) return
-        if (root.pendingOutgoing
-            && (String(root.selectedConversation.threadId) === String(root.pendingOutgoing.threadId)
-              || Model.conversationMatchesNumber(root.selectedConversation, root.pendingOutgoing.number))) {
-          var merged = Model.mergePendingOutgoing(fetched, root.pendingOutgoing)
-          root.setThreadMessages(root.loadingThreadId, merged.messages)
-          if (merged.resolved) root.pendingOutgoing = null
-        } else {
-          root.setThreadMessages(root.loadingThreadId, fetched)
-        }
+        try {
+          var parsed = JSON.parse(String(text))
+          if (Array.isArray(parsed)) threadProcess.result = parsed
+        } catch (parseError) { /* Reject malformed or incomplete history. */ }
       }
     }
-    stderr: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: if (threadProcess.current && String(text || "").trim() !== "") root.error = "Could not load conversation"
-    }
     onExited: function(exitCode) {
-      if (!threadProcess.current) return
+      if (!current) { result = null; return }
       root.loading = false
-      if (exitCode !== 0) root.error = "Could not load conversation"
+      if (exitCode !== 0 || result === null) {
+        root.error = "Could not load conversation"
+      } else if (root.selectedConversation
+                 && String(root.selectedConversation.threadId) === root.loadingThreadId
+                 && (result.length > 0 || root.messages.length === 0)) {
+        root.observeHistory(root.loadingThreadId, result)
+        root.setThreadMessages(root.loadingThreadId, result)
+      }
+      result = null
     }
   }
 
@@ -652,10 +720,44 @@ Item {
 
             PanelActionButton {
               iconText: "󰅖"
-              tooltipText: "Close"
+              tooltipText: qsTr("Close. Clears local activity; submitted sends may still finish.")
               foreground: root.foreground
               fontFamily: root.fontFamily
               onClicked: root.close()
+            }
+          }
+
+          Text {
+            Layout.fillWidth: true
+            text: qsTr("Phone: %1").arg(root.deviceName)
+            textFormat: Text.PlainText
+            elide: Text.ElideRight
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+
+          RowLayout {
+            visible: root.latestSend !== null
+            Layout.fillWidth: true
+            Text {
+              Layout.fillWidth: true
+              text: root.latestSend
+                ? (root.latestSend.conversation ? Model.conversationTitle(root.latestSend.conversation) : root.latestSend.number)
+                  + ": " + SendState.label(root.latestSend.state) : ""
+              textFormat: Text.PlainText
+              wrapMode: Text.Wrap
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+            Button {
+              text: "Edit copy"
+              visible: root.latestSend !== null && (root.latestSend.state === "failed" || root.latestSend.state === "unconfirmed")
+              enabled: !root.sending && !threadProcess.running
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.editSend(root.latestSend)
             }
           }
 
@@ -759,7 +861,10 @@ Item {
                       elide: Text.ElideRight
                     }
                     Text {
-                      text: Model.relativeTime(modelData.timestamp, root.nowMs)
+                      text: modelData.sendState === "unconfirmed" ? "Unconfirmed"
+                        : modelData.sendState === "failed" ? "Not submitted"
+                        : modelData.sendState ? "Pending"
+                        : Model.relativeTime(modelData.timestamp, root.nowMs)
                       textFormat: Text.PlainText
                       color: root.dim
                       font.family: root.fontFamily
@@ -785,12 +890,7 @@ Item {
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
                 onClicked: {
-                  if (modelData.pending && (modelData.threadId === null || modelData.threadId === undefined)) {
-                    root.error = "Waiting for the phone to create this thread…"
-                    root.refresh()
-                  } else {
-                    root.openThread(modelData)
-                  }
+                  root.openThread(modelData)
                 }
               }
             }
@@ -968,9 +1068,11 @@ Item {
 
                   Text {
                     Layout.alignment: Qt.AlignRight
-                    text: modelData.pending
-                      ? "Syncing…"
+                    text: modelData.sendState
+                      ? SendState.label(modelData.sendState)
                       : Model.relativeTime(modelData.timestamp, root.nowMs)
+                    Layout.maximumWidth: bubble.width - Style.space(24)
+                    wrapMode: Text.Wrap
                     textFormat: Text.PlainText
                     color: modelData.incoming ? root.dim : Color.menu.selectedText
                     font.family: root.fontFamily
@@ -1138,6 +1240,7 @@ Item {
             Button {
               text: "Send"
               enabled: !root.sending && replyField.text.trim() !== ""
+                && root.selectedConversation !== null && root.selectedConversation.threadId !== null
               foreground: root.foreground
               fontFamily: root.fontFamily
               bordered: true
