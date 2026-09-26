@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+umask 077
+original_args=("$@")
 
 usage() {
   echo "Usage: omalink [--notify-apps \"App, Package\"] [--popups on|off] <status|watch|media|media-action|media-volume|media-seek|ring|clipboard|share|dismiss|dismiss-all|notify-reply|contacts|conversations|messages|attachment|attachment-open|attachment-save|reply|sms|seen|mark-seen> [arguments]" >&2
@@ -44,7 +46,7 @@ capture_max_bytes=$((16 * 1024 * 1024))
 dbus_bounded() {
   local timeout_interval="$1"
   shift
-  { timeout "$timeout_interval" "$@" 2>/dev/null || true; } \
+  { timeout --kill-after=1s "$timeout_interval" "$@" 2>/dev/null || true; } \
     | head -c "$capture_max_bytes" || true
 }
 # How much of a phone's notification list is read per refresh. Each notification
@@ -77,20 +79,62 @@ phone_file_roots() {
     | sort -u
 }
 
-# Kill a busctl monitor as soon as its capture file crosses the byte ceiling.
-# This runs beside the request instead of after it, so a phone cannot grow the
-# capture while a call is pending. The monitor is killed, not the writer: the
-# monitor is the process holding the pipe that fills the file.
-capture_watchdog() {
-  local file="$1" pid="$2" size
-  while kill -0 "$pid" 2>/dev/null; do
-    size="$(stat -c %s -- "$file" 2>/dev/null || printf '0')"
-    if (( size > capture_max_bytes )); then
-      kill "$pid" 2>/dev/null || true
-      return 0
-    fi
+# The FIFO reader, rather than a polling check, sets the exact disk ceiling.
+# Each producer has its own process group so cleanup also stops descendants.
+stop_capture() {
+  local pid
+  for pid in "${request_pid:-}" "${monitor_pid:-}"; do
+    [[ -z $pid ]] || kill -KILL -- "-$pid" "$pid" 2>/dev/null || true
+  done
+  if [[ ${1:-} == abort && -n ${reader_pid:-} ]]; then kill "$reader_pid" 2>/dev/null || true; fi
+  for pid in "${request_pid:-}" "${monitor_pid:-}" "${reader_pid:-}"; do
+    [[ -z $pid ]] || wait "$pid" 2>/dev/null || true
+  done
+  request_pid="" monitor_pid="" reader_pid=""
+}
+
+cleanup_capture() {
+  stop_capture abort
+  [[ -z ${capture_dir:-} ]] || rm -rf -- "$capture_dir"
+}
+
+capture_ok() {
+  if (( $(stat -c %s -- "$capture_file") >= capture_max_bytes )); then
+    echo "Phone response exceeded the capture limit" >&2
+    return 1
+  fi
+}
+
+start_capture() {
+  local duration="$1"
+  shift
+  capture_dir="$(mktemp -d)"
+  capture_file="$capture_dir/signals"
+  trap cleanup_capture EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM HUP
+  mkfifo "$capture_dir/pipe"
+  : >"$capture_file"
+  head -c "$capture_max_bytes" <"$capture_dir/pipe" >"$capture_file" &
+  reader_pid=$!
+  setsid timeout --kill-after=1s 45s stdbuf -oL busctl --user --verbose --json=short \
+    monitor -- org.kde.kdeconnect >"$capture_dir/pipe" 2>/dev/null &
+  monitor_pid=$!
+  sleep 0.1
+  setsid timeout --kill-after=1s "$duration" busctl --user call -- \
+    org.kde.kdeconnect "$device_path" org.kde.kdeconnect.device.conversations \
+    "$@" >/dev/null 2>&1 &
+  request_pid=$!
+  while kill -0 "$request_pid" 2>/dev/null; do
+    capture_ok || return 1
     sleep 0.05
   done
+  if ! wait "$request_pid"; then
+    echo "Phone request failed or timed out" >&2
+    return 1
+  fi
+  request_pid=""
+  capture_ok
 }
 
 percent_decode() {
@@ -121,9 +165,9 @@ percent_decode() {
 # call sites test the value, and a caller that tested $? would fail open.
 phone_file() {
   local path="$1" limit="$2" real root size links
-  [[ -n $path && $limit =~ ^[0-9]+$ ]] || return 0
+  [[ -n $path && $path != *[$'\001'-$'\037'$'\177']* && $limit =~ ^[0-9]+$ ]] || return 0
   real="$(readlink -f -- "$path" 2>/dev/null || true)"
-  [[ -n $real && -f $real ]] || return 0
+  [[ -n $real && $real != *[$'\001'-$'\037'$'\177']* && -f $real && -r $real ]] || return 0
   links="$(stat -c %h -- "$real" 2>/dev/null || printf '1')"
   [[ $links =~ ^[0-9]+$ && $links -le 1 ]] || return 0
   while IFS= read -r root; do
@@ -192,7 +236,7 @@ truncate_text() {
 # instead, which shows as a missing reading rather than an empty panel.
 numeric_or() {
   local value="${1:-}" fallback="$2"
-  [[ $value =~ ^-?[0-9]+$ ]] || value="$fallback"
+  [[ $value =~ ^-?(0|[1-9][0-9]{0,9})$ ]] || value="$fallback"
   printf '%s' "$value"
 }
 
@@ -210,7 +254,8 @@ status() {
 
   local raw line id name device_path charge charging network_strength network_type notifications
   local -a devices=()
-  raw="$(kdeconnect-cli --list-available --id-name-only 2>/dev/null || true)"
+  local media
+  raw="$(dbus_bounded 5s kdeconnect-cli --list-available --id-name-only)"
 
   while IFS= read -r line; do
     [[ -n $line ]] || continue
@@ -218,7 +263,9 @@ status() {
     name="${line#* }"
     # A device name that contains a line break would otherwise parse as a second
     # device with an id no D-Bus path can use.
-    [[ -n $id && $name != "$line" && $id =~ ^[A-Za-z0-9]+$ ]] || continue
+    [[ -n $id && $name != "$line" && $id =~ ^[A-Za-z0-9]{1,128}$ ]] || continue
+    (( ${#devices[@]} < 8 )) || break
+    name="$(truncate_text "$name" "$name_max_chars")"
     device_path="/modules/kdeconnect/devices/$id"
     charge="$(dbus_property "$device_path/battery" org.kde.kdeconnect.device.battery charge i)"
     charging="$(dbus_property "$device_path/battery" org.kde.kdeconnect.device.battery isCharging b)"
@@ -226,16 +273,15 @@ status() {
     network_type="$(dbus_property "$device_path/connectivity_report" org.kde.kdeconnect.device.connectivity_report cellularNetworkType s)"
     notifications="$(notification_json "$device_path")"
     media="$(media_json "$device_path")"
-    devices+=("$(jq -cn \
+    devices+=("$(jq -cs \
       --arg id "$id" \
       --arg name "$name" \
       --argjson charge "$(numeric_or "${charge:-}" null)" \
       --argjson charging "$(boolean_or "${charging:-}" false)" \
       --argjson networkStrength "$(numeric_or "${network_strength:-}" null)" \
-      --arg networkType "${network_type:-}" \
-      --argjson notifications "${notifications:-[]}" \
+      --arg networkType "$(truncate_text "${network_type:-}" 32)" \
       --argjson media "${media:-null}" \
-      '{id: $id, name: $name, battery: {charge: $charge, charging: $charging}, connectivity: {strength: $networkStrength, type: $networkType}, notifications: $notifications, media: $media}')")
+      '{id: $id, name: $name, battery: {charge: $charge, charging: $charging}, connectivity: {strength: $networkStrength, type: $networkType}, notifications: .[0], media: $media}' <<<"${notifications:-[]}")")
   done <<<"$raw"
 
   if (( ${#devices[@]} == 0 )); then
@@ -258,7 +304,7 @@ notification_json() {
   while IFS= read -r notification_id; do
     [[ $read_count -lt $notifications_read_max && $kept_count -lt $notifications_max ]] || break
     read_count=$((read_count + 1))
-    [[ $notification_id =~ ^[A-Za-z0-9._:-]+$ ]] || continue
+    [[ $notification_id =~ ^[A-Za-z0-9_][A-Za-z0-9._:-]{0,127}$ ]] || continue
     notification_path="$notification_root/$notification_id"
     app_name="$(truncate_text "$(dbus_json_property "$notification_path" appName)" "$name_max_chars")"
     internal_id="$(truncate_text "$(dbus_json_property "$notification_path" internalId)" "$name_max_chars")"
@@ -273,13 +319,14 @@ notification_json() {
     notifications+=("$(jq -cn \
       --arg id "$notification_id" \
       --arg appName "$app_name" \
+      --arg packageName "$(cut -d '|' -f 2 <<<"$internal_id")" \
       --arg title "$title" \
       --arg text "$text" \
       --arg iconPath "$icon_path" \
       --argjson dismissable "$dismissable" \
       --arg replyId "$reply_id" \
       --argjson isConversation "$is_conversation" \
-      '{id: $id, appName: $appName, title: $title, text: $text, iconPath: $iconPath, dismissable: $dismissable, replyId: $replyId, replyable: ($replyId != ""), isConversation: $isConversation}')")
+      '{id: $id, appName: $appName, packageName: $packageName, title: $title, text: $text, iconPath: $iconPath, dismissable: $dismissable, replyId: $replyId, replyable: ($replyId != ""), isConversation: $isConversation}')")
   done < <(jq -r '.data[0][]?' <<<"$raw" 2>/dev/null)
 
   if (( ${#notifications[@]} == 0 )); then
@@ -387,41 +434,41 @@ media_json() {
 
 ring() {
   local device_id="${1:-}"
-  [[ $device_id =~ ^[A-Za-z0-9]+$ ]] || usage
+  [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ ]] || usage
   command -v kdeconnect-cli >/dev/null 2>&1 || {
     echo "KDE Connect is not installed" >&2
     exit 1
   }
-  kdeconnect-cli --device "$device_id" --ring
+  timeout --kill-after=1s 10s kdeconnect-cli --device "$device_id" --ring
 }
 
 send_clipboard() {
   local device_id="${1:-}"
-  [[ $device_id =~ ^[A-Za-z0-9]+$ ]] || usage
+  [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ ]] || usage
   command -v kdeconnect-cli >/dev/null 2>&1 || {
     echo "KDE Connect is not installed" >&2
     exit 1
   }
-  kdeconnect-cli --device "$device_id" --send-clipboard
+  timeout --kill-after=1s 10s kdeconnect-cli --device "$device_id" --send-clipboard
 }
 
 share_text() {
   local device_id="${1:-}" value="${2:-}"
-  [[ $device_id =~ ^[A-Za-z0-9]+$ && -n $value ]] || usage
+  [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ && -n $value ]] || usage
   command -v kdeconnect-cli >/dev/null 2>&1 || {
     echo "KDE Connect is not installed" >&2
     exit 1
   }
   if [[ $value =~ ^https?:// ]]; then
-    kdeconnect-cli --device "$device_id" --share "$value"
+    timeout --kill-after=1s 10s kdeconnect-cli --device "$device_id" --share "$value"
   else
-    kdeconnect-cli --device "$device_id" --share-text "$value"
+    timeout --kill-after=1s 10s kdeconnect-cli --device "$device_id" --share-text "$value"
   fi
 }
 
 media() {
   local device_id="${1:-}"
-  [[ $device_id =~ ^[A-Za-z0-9]+$ ]] || usage
+  [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ ]] || usage
   media_json "/modules/kdeconnect/devices/$device_id"
 }
 
@@ -430,26 +477,26 @@ media() {
 # Previous, and Next.
 media_action() {
   local device_id="${1:-}" action="${2:-}"
-  [[ $device_id =~ ^[A-Za-z0-9]+$ && $action =~ ^(PlayPause|Play|Pause|Next|Previous|Stop|Rewind|FastForward)$ ]] || usage
-  busctl --user call -- org.kde.kdeconnect "/modules/kdeconnect/devices/$device_id/mprisremote" \
+  [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ && $action =~ ^(PlayPause|Play|Pause|Next|Previous|Stop|Rewind|FastForward)$ ]] || usage
+  timeout --kill-after=1s 10s busctl --user call -- org.kde.kdeconnect "/modules/kdeconnect/devices/$device_id/mprisremote" \
     org.kde.kdeconnect.device.mprisremote sendAction s "$action" >/dev/null
 }
 
 media_volume() {
   local device_id="${1:-}" volume="${2:-}"
-  [[ $device_id =~ ^[A-Za-z0-9]+$ && $volume =~ ^[0-9]+$ && $volume -ge 0 && $volume -le 100 ]] || usage
-  busctl --user call -- org.kde.kdeconnect "/modules/kdeconnect/devices/$device_id/mprisremote" \
+  [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ && $volume =~ ^[0-9]{1,3}$ && $((10#$volume)) -le 100 ]] || usage
+  timeout --kill-after=1s 10s busctl --user call -- org.kde.kdeconnect "/modules/kdeconnect/devices/$device_id/mprisremote" \
     org.freedesktop.DBus.Properties Set ssv \
-    org.kde.kdeconnect.device.mprisremote volume i "$volume" >/dev/null
+    org.kde.kdeconnect.device.mprisremote volume i "$((10#$volume))" >/dev/null
 }
 
 # Seek to an absolute position (milliseconds). The plugin only exposes a
 # relative seek, so the offset is computed from the live position here.
 media_seek() {
   local device_id="${1:-}" target="${2:-}" mpris_path position offset
-  [[ $device_id =~ ^[A-Za-z0-9]+$ && $target =~ ^[0-9]+$ ]] || usage
+  [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ && $target =~ ^[0-9]{1,10}$ && $((10#$target)) -le 2147483647 ]] || usage
   mpris_path="/modules/kdeconnect/devices/$device_id/mprisremote"
-  [[ $(media_json "$mpris_path") != null ]] || {
+  [[ $(media_json "/modules/kdeconnect/devices/$device_id") != null ]] || {
     echo "No media is playing on the phone" >&2
     exit 1
   }
@@ -458,33 +505,19 @@ media_seek() {
     echo "No media is playing on the phone" >&2
     exit 1
   }
-  offset=$((target - position))
-  busctl --user call -- org.kde.kdeconnect "$mpris_path" \
+  [[ $position =~ ^-?[0-9]{1,10}$ ]] || usage
+  offset=$((10#$target - position))
+  (( offset >= -2147483648 && offset <= 2147483647 )) || usage
+  timeout --kill-after=1s 10s busctl --user call -- org.kde.kdeconnect "$mpris_path" \
     org.kde.kdeconnect.device.mprisremote seek i "$offset" >/dev/null
 }
 
 dismiss_notification() {
   local device_id="${1:-}" notification_id="${2:-}"
-  [[ $device_id =~ ^[A-Za-z0-9]+$ && $notification_id =~ ^[A-Za-z0-9._:-]+$ && $notification_id != -* && $notification_id != . && $notification_id != .. ]] || usage
-  busctl --user call -- org.kde.kdeconnect \
+  [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ && $notification_id =~ ^[A-Za-z0-9_][A-Za-z0-9._:-]{0,127}$ && $notification_id != -* && $notification_id != . && $notification_id != .. ]] || usage
+  timeout --kill-after=1s 10s busctl --user call -- org.kde.kdeconnect \
     "/modules/kdeconnect/devices/$device_id/notifications/$notification_id" \
     org.kde.kdeconnect.device.notifications.notification dismiss >/dev/null
-}
-
-# KDE Connect's own desktop popups for phone notifications carry no default
-# action, so clicking them in the Omarchy notification popup does nothing.
-# OmaLink silences that one event and emits its own popups instead, with a
-# click action that opens the OmaLink panel. Message contents are never shown
-# in popups; they are readable in the panel and Messages window.
-ensure_quiet_daemon_popups() {
-  local config="${XDG_CONFIG_HOME:-${HOME:-}/.config}/kdeconnect.notifyrc"
-  mkdir -p "$(dirname "$config")"
-  if [[ -e $config ]]; then
-    grep -q '^\[Event/notification\]' "$config" \
-      || printf '\n[Event/notification]\nAction=\n' >>"$config"
-    return 0
-  fi
-  printf '# Written by OmaLink: it shows its own phone notification popups.\n[Event/notification]\nAction=\n' >"$config"
 }
 
 # Phone text reaches a popup, and notification daemons render both the summary
@@ -496,9 +529,8 @@ notify_escape() {
 }
 
 handle_posted() {
-  local device_id="$1" notification_id="$2" notification_path app_name internal_id title text is_conversation icon_path silent summary body action
-  local -a icon_args=()
-  [[ $device_id =~ ^[A-Za-z0-9]+$ && $notification_id =~ ^[A-Za-z0-9._:-]+$ ]] || return 0
+  local device_id="$1" notification_id="$2" notification_path app_name internal_id title text silent summary body action
+  [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ && $notification_id =~ ^[A-Za-z0-9_][A-Za-z0-9._:-]{0,127}$ ]] || return 0
   sleep 0.3
   notification_path="/modules/kdeconnect/devices/$device_id/notifications/$notification_id"
   # On reconnect the phone re-sends every notification still in its shade and
@@ -511,26 +543,14 @@ handle_posted() {
   notification_allowed "$app_name" "$internal_id" || return 0
   title="$(truncate_text "$(dbus_json_property "$notification_path" title)" "$title_max_chars")"
   text="$(truncate_text "$(dbus_json_property "$notification_path" text)" "$body_max_chars")"
-  is_conversation="$(dbus_json_property "$notification_path" isConversation)"
-  icon_path="$(phone_image_path "$(dbus_json_property "$notification_path" iconPath)" "$icon_max_bytes")"
   # A notification dismissed between the signal and this read has no fields
   # left, and a popup with an empty title is worse than none.
   if [[ -z $title && -z $text && -z $app_name ]]; then
     return 0
   fi
-  if [[ $is_conversation == true ]]; then
-    summary="New message"
-    body="Open OmaLink to read it"
-  else
-    # The notification daemon renders both fields as markup, so phone text is
-    # escaped before it becomes a popup.
-    summary="$(notify_escape "${title:-${app_name:-Phone notification}}")"
-    body="$(notify_escape "$text")"
-  fi
-  if [[ -n $icon_path ]]; then
-    icon_args=(-i "$icon_path")
-  fi
-  action="$(timeout 300 notify-send -a OmaLink "${icon_args[@]}" \
+  summary="$(notify_escape "${app_name:-Phone notification}")"
+  body="Open OmaLink to read it"
+  action="$(timeout --kill-after=1s 30s notify-send -a OmaLink \
     -A "default=Open" -- "$summary" "$body" 2>/dev/null || true)"
   if [[ $action == default ]]; then
     open_panel || true
@@ -563,80 +583,91 @@ open_panel() {
 
 watch() {
   command -v dbus-monitor >/dev/null 2>&1 || { echo "dbus-monitor is required" >&2; exit 1; }
-  # One watcher only, even with a Service instance per bar: the first holds
-  # the lock, the rest block here as standbys and take over if it dies. Child
-  # processes must not inherit the lock fd (9>&-) or a stray would keep it.
-  local runtime="${XDG_RUNTIME_DIR:-/tmp}"
-  local pid_file="$runtime/omalink-watch.pid" stale lock_file="$runtime/omalink-watch.lock"
-  # With no runtime dir this lands in a world-writable directory, so a symlink
-  # planted under our name must not become a file we write through.
-  if [[ -L $lock_file ]]; then
-    rm -f "$lock_file"
-  fi
-  exec 9>"$lock_file"
+  # Never use shared /tmp names or trust a pid left by another process.
+  local runtime="${XDG_RUNTIME_DIR:-}" work monitor_pid="" pid line device_id="" notification_id
+  local -a workers=() live=() options=(--popups "$NOTIFY_POPUPS")
+  [[ -n $runtime && -d $runtime && ! -L $runtime && -O $runtime ]] || {
+    echo "A private XDG_RUNTIME_DIR is required" >&2; exit 1;
+  }
+  [[ $(stat -c %a -- "$runtime") == 700 ]] || {
+    echo "XDG_RUNTIME_DIR must have mode 700" >&2; exit 1;
+  }
+  [[ ! -L $runtime/omalink-watch.lock ]] || exit 1
+  exec 9>>"$runtime/omalink-watch.lock"
   flock 9
-  # Holding the lock means no other watcher is alive, so a pid left in the file
-  # belongs to a dbus-monitor orphaned by a killed watcher (the shell kills the
-  # watcher on reload but cannot reach this grandchild). Reap that one pid, and
-  # only when it is still a dbus-monitor, so an unrelated process cannot be hit.
-  if [[ -s $pid_file ]]; then
-    stale="$(<"$pid_file")"
-    if [[ $stale =~ ^[0-9]+$ ]] && grep -qa 'dbus-monitor' "/proc/$stale/cmdline" 2>/dev/null; then
-      kill "$stale" 2>/dev/null || true
-    fi
-    rm -f "$pid_file"
-  fi
-  ensure_quiet_daemon_popups || true
-  if [[ -L $pid_file ]]; then
-    rm -f "$pid_file"
-  fi
-  local line device_id="" notification_id
-  while IFS= read -r line; do
+  work="$(mktemp -d "$runtime/omalink-watch.XXXXXX")"
+  cleanup_watch() {
+    for pid in "$monitor_pid" "${workers[@]}"; do
+      [[ -z $pid ]] || kill -KILL -- "-$pid" "$pid" 2>/dev/null || true
+    done
+    for pid in "$monitor_pid" "${workers[@]}"; do
+      [[ -z $pid ]] || wait "$pid" 2>/dev/null || true
+    done
+    rm -rf -- "$work"
+  }
+  trap cleanup_watch EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM HUP
+  [[ -z $NOTIFY_APPS_SET ]] || options+=(--notify-apps "$NOTIFY_APPS")
+  mkfifo "$work/signals"
+  setsid timeout --kill-after=1s 1h dbus-monitor --session \
+    "type='signal',sender='org.kde.kdeconnect',interface='org.kde.kdeconnect.device.notifications',member='notificationPosted'" \
+    >"$work/signals" 2>/dev/null 9>&- &
+  monitor_pid=$!
+  while IFS= read -r -n 4096 line; do
     case $line in
       *"member=notificationPosted"*)
         device_id="${line#*path=/modules/kdeconnect/devices/}"
         device_id="${device_id%%/*}"
         ;;
       *'string "'*)
-        [[ -n $device_id ]] || continue
         notification_id="${line#*string \"}"
         notification_id="${notification_id%\"*}"
-        handle_posted "$device_id" "$notification_id" 9>&- &
+        [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ && $notification_id =~ ^[A-Za-z0-9_][A-Za-z0-9._:-]{0,127}$ ]] || continue
+        live=()
+        for pid in "${workers[@]}"; do
+          if kill -0 "$pid" 2>/dev/null; then live+=("$pid"); else wait "$pid" || true; fi
+        done
+        workers=("${live[@]}")
+        # Dropped popups stay available in the panel. A flood never creates
+        # unbounded helpers waiting for popup actions.
+        if [[ $NOTIFY_POPUPS == on ]] && (( ${#workers[@]} < 4 )); then
+          setsid "$0" "${options[@]}" _posted "$device_id" "$notification_id" 9>&- &
+          workers+=("$!")
+        fi
         printf 'posted %s %s\n' "$device_id" "$notification_id"
         device_id=""
         ;;
     esac
-  done < <(dbus-monitor --session \
-    "type='signal',interface='org.kde.kdeconnect.device.notifications',member='notificationPosted'" \
-    2>/dev/null 9>&- &
-    printf '%s\n' "$!" >"$pid_file"
-    wait)
-  # Load-bearing: handle_posted runs in the background, and this is what makes
-  # the output of the popup work land before the watcher reports it is done.
-  wait
+  done <"$work/signals"
+  for pid in "${workers[@]}"; do wait "$pid" || true; done
+  exit 0
 }
 
 notify_reply() {
   local device_id="${1:-}" reply_id="${2:-}" message="${3:-}"
-  [[ $device_id =~ ^[A-Za-z0-9]+$ && $reply_id =~ ^[A-Za-z0-9._:-]+$ && $reply_id != -* && -n $message ]] || usage
-  busctl --user call -- org.kde.kdeconnect \
+  [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ && $reply_id =~ ^[A-Za-z0-9_][A-Za-z0-9._:-]{0,127}$ && $reply_id != -* && -n $message ]] || usage
+  timeout --kill-after=1s 10s busctl --user call -- org.kde.kdeconnect \
     "/modules/kdeconnect/devices/$device_id/notifications" \
     org.kde.kdeconnect.device.notifications sendReply ss "$reply_id" "$message" >/dev/null
 }
 
 dismiss_all_notifications() {
   local device_id="${1:-}" notification_root raw notification_id notification_path app_name internal_id
-  [[ $device_id =~ ^[A-Za-z0-9]+$ ]] || usage
+  [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ ]] || usage
+  local read_count=0
   notification_root="/modules/kdeconnect/devices/$device_id/notifications"
   raw="$(dbus_bounded 5s busctl --user --json=short call -- org.kde.kdeconnect \
     "$notification_root" org.kde.kdeconnect.device.notifications activeNotifications)"
   while IFS= read -r notification_id; do
-    [[ $notification_id =~ ^[A-Za-z0-9._:-]+$ ]] || continue
+    (( read_count < notifications_read_max )) || break
+    read_count=$((read_count + 1))
+    [[ $notification_id =~ ^[A-Za-z0-9_][A-Za-z0-9._:-]{0,127}$ ]] || continue
     notification_path="$notification_root/$notification_id"
-    app_name="$(dbus_json_property "$notification_path" appName)"
-    internal_id="$(dbus_json_property "$notification_path" internalId)"
+    app_name="$(truncate_text "$(dbus_json_property "$notification_path" appName)" "$name_max_chars")"
+    internal_id="$(truncate_text "$(dbus_json_property "$notification_path" internalId)" "$name_max_chars")"
     notification_allowed "$app_name" "$internal_id" || continue
-    busctl --user call -- org.kde.kdeconnect "$notification_path" \
+    timeout --kill-after=1s 10s busctl --user call -- org.kde.kdeconnect "$notification_path" \
       org.kde.kdeconnect.device.notifications.notification dismiss >/dev/null 2>&1 || true
   done < <(jq -r '.data[0][]?' <<<"$raw" 2>/dev/null)
 }
@@ -646,20 +677,30 @@ contact_records_json() {
   device_path="/modules/kdeconnect/devices/$device_id"
   contact_dir="${XDG_DATA_HOME:-${HOME:-}/.local/share}/kpeoplevcard/kdeconnect-$device_id"
 
-  busctl --user call -- org.kde.kdeconnect "$device_path/contacts" \
+  timeout --kill-after=1s 10s busctl --user call -- org.kde.kdeconnect "$device_path/contacts" \
     org.kde.kdeconnect.device.contacts synchronizeRemoteWithLocal >/dev/null 2>&1 || true
 
-  if ! compgen -G "$contact_dir/*.vcf" >/dev/null; then
+  if [[ ! -d $contact_dir || -L $contact_dir ]]; then
     printf '%s\n' '[]'
     return
   fi
 
+  # Limit files, bytes, and numbers while reading, before awk or jq hold them.
+  {
+    local file count=0
+    while IFS= read -r -d '' file; do
+      (( count < contacts_max )) || break
+      count=$((count + 1))
+      head -c 1048576 -- "$file"
+      printf '\n'
+    done < <(find "$contact_dir" -maxdepth 1 -type f -name '*.vcf' -size -1048577c -print0)
+  } 2>/dev/null | head -c "$capture_max_bytes" |
   awk -v max="$contacts_max" '
     BEGIN { emitted = 0 }
     function value() { return substr($0, index($0, ":") + 1) }
     /^BEGIN:VCARD/ { name = ""; phone_count = 0 }
-    /^FN[;:]/ { name = value(); gsub(/\\,/, ",", name); gsub(/\\;/, ";", name) }
-    /^TEL[;:]/ { phones[++phone_count] = value() }
+    /^FN[;:]/ { name = substr(value(), 1, 256); gsub(/\\,/, ",", name); gsub(/\\;/, ";", name) }
+    /^TEL[;:]/ { if (phone_count < 20) phones[++phone_count] = substr(value(), 1, 128) }
     /^END:VCARD/ {
       gsub(/[\t\r\n]/, " ", name)
       if (length(name) > 256) name = substr(name, 1, 256)
@@ -671,17 +712,17 @@ contact_records_json() {
       }
       delete phones
     }
-  ' "$contact_dir"/*.vcf | jq -Rsc '
+  ' | jq -Rsc '
     split("\n")
     | map(select(length > 0) | split("\t") | {number: .[0], name: .[1]})
     | unique_by(.number)
     | sort_by(.name | ascii_downcase)
-  '
+  ' || true
 }
 
 contacts() {
   local device_id="${1:-}"
-  [[ $device_id =~ ^[A-Za-z0-9]+$ ]] || usage
+  [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ ]] || usage
   contact_records_json "$device_id"
 }
 
@@ -691,10 +732,14 @@ active_conversations_raw() {
 }
 
 conversations() {
-  local device_id="${1:-}" device_path contacts raw prev attempt count requested=0 settled=0
-  [[ $device_id =~ ^[A-Za-z0-9]+$ ]] || usage
+  local device_id="${1:-}" device_path contacts_file raw prev attempt count requested=0 settled=0
+  [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ ]] || usage
   device_path="/modules/kdeconnect/devices/$device_id"
-  contacts="$(contact_records_json "$device_id")"
+  contacts_file="$(mktemp)"
+  trap 'rm -f -- "$contacts_file"' EXIT
+  trap 'exit 143' TERM HUP
+  trap 'exit 130' INT
+  contact_records_json "$device_id" >"$contacts_file"
 
   # kdeconnectd never asks the phone for messages newer than its cache, so a
   # text sent on the phone stays invisible until the phone happens to push
@@ -705,7 +750,7 @@ conversations() {
   raw="$(active_conversations_raw "$device_path" 2>/dev/null || true)"
   for attempt in $(seq 1 20); do
     if [[ -n $raw && $requested == 0 ]]; then
-      busctl --user call -- org.kde.kdeconnect "$device_path" \
+      timeout --kill-after=1s 10s busctl --user call -- org.kde.kdeconnect "$device_path" \
         org.kde.kdeconnect.device.conversations requestAllConversationThreads \
         >/dev/null 2>&1 || true
       requested=1
@@ -727,7 +772,8 @@ conversations() {
     echo "The phone connection is not ready yet" >&2
     exit 1
   fi
-  jq -c --argjson contacts "$contacts" '
+  jq -c --slurpfile contactsFile "$contacts_file" '
+    $contactsFile[0] as $contacts |
     def number_key:
       gsub("[^0-9]"; "") | if length > 10 then .[-10:] else . end;
     ($contacts | reduce .[] as $contact ({};
@@ -738,16 +784,16 @@ conversations() {
     [.data[0][]? | .data as $message | {
       threadId: $message[6],
       preview: (($message[1] // "") | tostring | .[0:$previewMax]),
-      addresses: ([$message[2][]?[0]] | unique),
-      names: ([$message[2][]?[0] | display_name] | unique),
+      addresses: ([$message[2][0:20][]?[0] | tostring | .[0:128]] | unique),
+      names: ([$message[2][0:20][]?[0] | tostring | .[0:128] | display_name] | unique),
       timestamp: $message[3],
       unread: ($message[5] == 0),
       incoming: ($message[4] == 1),
       attachmentCount: ($message[9] | length),
       attachments: [$message[9][]? | {
-        partId: .[0], mimeType: .[1],
+        partId: .[0], mimeType: ((.[1] // "") | tostring | .[0:128]),
         thumbnail: (if ((.[2] // "") | tostring | length) <= $thumbMax then (.[2] // "") else "" end),
-        unique: .[3]
+        unique: (if ((.[3] // "") | type == "string" and length <= 256) then .[3] else "" end)
       }][0:$attachmentsMax]
     }]
     | sort_by(.timestamp)
@@ -755,44 +801,21 @@ conversations() {
     | .[0:$threadsMax]
   ' --argjson threadsMax "$threads_max" --argjson thumbMax "$thumbnail_max_chars" \
     --argjson attachmentsMax "$attachments_per_message" --argjson previewMax "$preview_max_chars" <<<"$raw"
+  exit 0
 }
 
 messages() {
-  local device_id="${1:-}" thread_id="${2:-}" device_path capture_dir capture_file monitor_pid watchdog_pid
-  [[ $device_id =~ ^[A-Za-z0-9]+$ && $thread_id =~ ^[0-9]+$ ]] || usage
+  local device_id="${1:-}" thread_id="${2:-}" device_path capture_dir="" capture_file=""
+  local monitor_pid="" request_pid="" reader_pid=""
+  [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ && $thread_id =~ ^[0-9]{1,18}$ ]] || usage
   device_path="/modules/kdeconnect/devices/$device_id"
-  capture_dir="$(mktemp -d)"
-  capture_file="$capture_dir/signals"
-  monitor_pid=""
+  start_capture 12s requestConversation xii "$thread_id" 0 200 || exit 1
+  stop_capture
+  capture_ok || exit 1
 
-  cleanup_messages() {
-    [[ -z $monitor_pid ]] || kill "$monitor_pid" 2>/dev/null || true
-    [[ -z $watchdog_pid ]] || kill "$watchdog_pid" 2>/dev/null || true
-    rm -r "$capture_dir"
-  }
-  trap cleanup_messages RETURN
-
-  # Both bounds are concurrent: the watchdog kills the monitor at the byte
-  # ceiling even while the request is pending, and timeout ends the request.
-  stdbuf -oL busctl --user --verbose --json=short monitor -- org.kde.kdeconnect >"$capture_file" 2>/dev/null &
-  monitor_pid=$!
-  capture_watchdog "$capture_file" "$monitor_pid" &
-  watchdog_pid=$!
-  sleep 0.1
-  timeout 12s busctl --user call -- org.kde.kdeconnect "$device_path" \
-    org.kde.kdeconnect.device.conversations requestConversation xii "$thread_id" 0 30 >/dev/null \
-    || true
-
-  kill "$monitor_pid" 2>/dev/null || true
-  wait "$monitor_pid" 2>/dev/null || true
-  monitor_pid=""
-  kill "$watchdog_pid" 2>/dev/null || true
-  wait "$watchdog_pid" 2>/dev/null || true
-  watchdog_pid=""
-
-  jq -sc --argjson threadId "$thread_id" '
+  jq -sc --argjson threadId "$thread_id" --arg path "$device_path" '
     [.[]
-      | select(.type == "signal"
+      | select(.type == "signal" and .path == $path
           and .interface == "org.kde.kdeconnect.device.conversations"
           and .member == "conversationUpdated")
       | .payload.data[0].data
@@ -803,9 +826,9 @@ messages() {
           incoming: (.[4] == 1),
           attachmentCount: (.[9] | length),
           attachments: [.[9][]? | {
-            partId: .[0], mimeType: .[1],
+            partId: .[0], mimeType: ((.[1] // "") | tostring | .[0:128]),
             thumbnail: (if ((.[2] // "") | tostring | length) <= $thumbMax then (.[2] // "") else "" end),
-            unique: .[3]
+            unique: (if ((.[3] // "") | type == "string" and length <= 256) then .[3] else "" end)
           }][0:$attachmentsMax]
         }]
     | unique_by(.timestamp, .body, ([.attachments[].unique] | join("|")))
@@ -813,57 +836,34 @@ messages() {
     | .[-$messagesMax:]
   ' --argjson messagesMax "$messages_max" --argjson bodyMax "$body_max_chars" \
     --argjson thumbMax "$thumbnail_max_chars" --argjson attachmentsMax "$attachments_per_message" \
-    "$capture_file" || printf '[]\n'
+    "$capture_file"
+  exit 0
 }
 
 attachment() {
-  local device_id="${1:-}" part_id="${2:-}" unique="${3:-}" mode="${4:-}" device_path capture_dir capture_file monitor_pid watchdog_pid path arrived attempt
-  [[ $device_id =~ ^[A-Za-z0-9]+$ && $part_id =~ ^-?[0-9]+$ && $unique =~ ^[[:print:]]+$ && $unique != -* ]] || usage
+  local device_id="${1:-}" part_id="${2:-}" unique="${3:-}" mode="${4:-file}" device_path
+  local capture_dir="" capture_file="" monitor_pid="" request_pid="" reader_pid="" path arrived attempt
+  [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ && $part_id =~ ^-?[0-9]{1,18}$ && $unique =~ ^[[:print:]]{1,256}$ && $unique != -* ]] || usage
+  [[ $mode == image || $mode == file ]] || usage
   device_path="/modules/kdeconnect/devices/$device_id"
-  capture_dir="$(mktemp -d)"
-  capture_file="$capture_dir/signals"
-  monitor_pid=""
-
-  cleanup_attachment() {
-    [[ -z $monitor_pid ]] || kill "$monitor_pid" 2>/dev/null || true
-    [[ -z $watchdog_pid ]] || kill "$watchdog_pid" 2>/dev/null || true
-    rm -r "$capture_dir"
-  }
-  trap cleanup_attachment RETURN
-
-  # The watchdog runs while the request is in flight, so the capture can never
-  # grow past its ceiling, however long the phone holds the call open.
-  stdbuf -oL busctl --user --json=short monitor -- org.kde.kdeconnect >"$capture_file" 2>/dev/null &
-  monitor_pid=$!
-  capture_watchdog "$capture_file" "$monitor_pid" &
-  watchdog_pid=$!
-  sleep 0.1
-  timeout 30s busctl --user call -- org.kde.kdeconnect "$device_path" \
-    org.kde.kdeconnect.device.conversations requestAttachmentFile xs "$part_id" "$unique" >/dev/null || true
+  start_capture 30s requestAttachmentFile xs "$part_id" "$unique" || exit 1
 
   path=""
-  for attempt in $(seq 1 60); do
-    path="$( { jq -r --arg unique "$unique" '
-      select(.type == "signal"
+  for ((attempt=0; attempt<60; attempt++)); do
+    capture_ok || exit 1
+    path="$( { jq -r --arg unique "$unique" --arg path "$device_path" '
+      select(.type == "signal" and .path == $path
           and .interface == "org.kde.kdeconnect.device.conversations"
           and .member == "attachmentReceived")
       | select(.payload.data[1] == $unique)
       | .payload.data[0]
     ' "$capture_file" 2>/dev/null || true; } | head -n 1 )"
     [[ -z $path ]] || break
-    # The watchdog has already stopped the writer; stop waiting for a path too.
-    if (( $(stat -c %s -- "$capture_file" 2>/dev/null || printf '0') > capture_max_bytes )); then
-      break
-    fi
     sleep 0.5
   done
 
-  kill "$monitor_pid" 2>/dev/null || true
-  wait "$monitor_pid" 2>/dev/null || true
-  monitor_pid=""
-  kill "$watchdog_pid" 2>/dev/null || true
-  wait "$watchdog_pid" 2>/dev/null || true
-  watchdog_pid=""
+  stop_capture
+  capture_ok || exit 1
 
   # The phone chose this file and the daemon wrote it, so the path is only used
   # once it resolves to a small file inside KDE Connect's own directories.
@@ -881,12 +881,14 @@ attachment() {
   # so what reaches Qt's image loader is a raster file rather than whatever the
   # phone chose to send under that name.
   if [[ $mode == image ]]; then
-    raster_image "$path" || {
+    path="$(phone_file "$path" "$album_art_max_bytes")"
+    [[ -n $path ]] && raster_image "$path" || {
       echo "Attachment is not the image the phone said it was" >&2
       exit 1
     }
   fi
   printf '%s\n' "$path"
+  exit 0
 }
 
 attachment_save() {
@@ -912,7 +914,8 @@ attachment_save() {
   n=1
   # -L as well as -e: a dangling symlink is a name that already exists, and cp
   # would otherwise write through it.
-  while [[ -e $target || -L $target ]]; do
+  while ! (set -o noclobber; : >"$target") 2>/dev/null; do
+    [[ -e $target || -L $target ]] || { echo "Cannot save in Downloads" >&2; return 1; }
     name="${base%.*}"
     ext="${base##*.}"
     if [[ -z $name || $name == "$base" ]]; then
@@ -922,7 +925,7 @@ attachment_save() {
     fi
     n=$((n + 1))
   done
-  cp "$source" "$target"
+  if ! cat -- "$source" >"$target"; then rm -f -- "$target"; return 1; fi
   printf '%s\n' "$target"
 }
 
@@ -936,9 +939,9 @@ attachment_save() {
 # this is asked first and the content scan below is normalized to match.
 attachment_mime_kind() {
   local path="$1" mime
-  command -v xdg-mime >/dev/null 2>&1 || return 1
-  mime="$(xdg-mime query filetype "$path" 2>/dev/null)" || return 1
-  [[ -n $mime ]] || return 1
+  command -v xdg-mime >/dev/null 2>&1 || { printf 'unknown type'; return 0; }
+  mime="$(timeout --kill-after=1s 5s xdg-mime query filetype "$path" 2>/dev/null)" || { printf 'unknown type'; return 0; }
+  [[ -n $mime ]] || { printf 'unknown type'; return 0; }
   # xdg-open strips the parameters before choosing a handler, so a value like
   # "text/html; charset=utf-8" must not slip past the exact match below.
   mime="${mime%%;*}"
@@ -955,6 +958,7 @@ attachment_mime_kind() {
 
 attachment_content_kind() {
   local path="$1" magic name text kind
+  if [[ -x $path ]]; then printf 'program'; return 0; fi
   name="${path##*/}"
   case ${name,,} in
     *.desktop | *.lnk | *.scr | *.appimage | *.exe | *.msi | *.bat | *.cmd | *.ps1 | *.sh | *.bash | *.zsh | *.py | *.pl | *.rb | *.cgi | *.php | *.asp | *.aspx | *.jsp | *.jar | *.deb | *.rpm)
@@ -1019,8 +1023,8 @@ open_attachment() {
 
 reply() {
   local device_id="${1:-}" thread_id="${2:-}" message="${3:-}"
-  [[ $device_id =~ ^[A-Za-z0-9]+$ && $thread_id =~ ^[0-9]+$ && -n $message ]] || usage
-  busctl --user call -- org.kde.kdeconnect \
+  [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ && $thread_id =~ ^[0-9]+$ && -n $message ]] || usage
+  timeout --kill-after=1s 10s busctl --user call -- org.kde.kdeconnect \
     "/modules/kdeconnect/devices/$device_id" \
     org.kde.kdeconnect.device.conversations replyToConversation \
     xsav "$thread_id" "$message" 0 >/dev/null
@@ -1032,12 +1036,13 @@ reply() {
 # latest message is newer than the seen timestamp. Only ids and timestamps are
 # stored, never message content.
 seen_file() {
-  printf '%s/omalink/seen.json' "${XDG_STATE_HOME:-${HOME:-}/.local/state}"
+  printf '%s/omalink/seen-%s.json' "${XDG_STATE_HOME:-${HOME:-}/.local/state}" "$1"
 }
 
 seen() {
-  local file
-  file="$(seen_file)"
+  local device_id="${1:-}" file
+  [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ ]] || usage
+  file="$(seen_file "$device_id")"
   if [[ -f $file ]] && jq -e 'type == "object"' "$file" >/dev/null 2>&1; then
     jq -c '.' "$file"
   else
@@ -1046,49 +1051,64 @@ seen() {
 }
 
 mark_seen() {
-  local file updates="{}" current
+  local device_id="${1:-}" file updates="{}" current temp
+  [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ ]] || usage
+  shift
   (( $# >= 2 && $# % 2 == 0 )) || usage
   while (( $# >= 2 )); do
     [[ $1 =~ ^[0-9]+$ && $2 =~ ^[0-9]+$ ]] || usage
     updates="$(jq -c --arg id "$1" --argjson ts "$2" '.[$id] = $ts' <<<"$updates")"
     shift 2
   done
-  file="$(seen_file)"
+  file="$(seen_file "$device_id")"
   mkdir -p "$(dirname "$file")"
   (
     flock 9
-    current="$(seen)"
+    current="$(seen "$device_id")"
+    temp="$(mktemp "${file}.XXXXXX")"
+    trap 'rm -f -- "$temp"' EXIT
     jq -cn --argjson current "$current" --argjson updates "$updates" \
-      '$current * $updates' >"$file.tmp"
-    mv "$file.tmp" "$file"
+      '$updates | to_entries | reduce .[] as $entry ($current; .[$entry.key] = ([.[$entry.key] // 0, $entry.value] | max))' >"$temp"
+    mv -- "$temp" "$file"
   ) 9>"$file.lock"
 }
 
 send_sms() {
   local device_id="${1:-}" destination="${2:-}" message="${3:-}" digits
   digits="${destination//[^0-9]/}"
-  [[ $device_id =~ ^[A-Za-z0-9]+$ && $destination =~ ^[+0-9().[:space:]-]+$ && ${#digits} -ge 3 && -n $message ]] || usage
-  kdeconnect-cli --device "$device_id" --send-sms "$message" --destination "$destination"
+  [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ && $destination =~ ^[+0-9().[:space:]-]+$ && ${#digits} -ge 3 && -n $message ]] || usage
+  timeout --kill-after=1s 10s kdeconnect-cli --device "$device_id" --send-sms "$message" --destination "$destination"
 }
 
 NOTIFY_APPS_SET=""
 NOTIFY_APPS=""
 NOTIFY_POPUPS="on"
-omalink_args=()
 while (( $# > 0 )); do
   case $1 in
-    # An empty value is meaningful for --notify-apps (allow everything), so the
-    # check is for a missing argument, not an empty one.
     --notify-apps) (( $# >= 2 )) || usage; NOTIFY_APPS_SET=1; NOTIFY_APPS="$2"; shift 2 ;;
     --popups) (( $# >= 2 )) || usage; NOTIFY_POPUPS="$2"; shift 2 ;;
-    *) omalink_args+=("$1"); shift ;;
+    --) shift; break ;;
+    -*) usage ;;
+    *) break ;;
   esac
 done
-set -- "${omalink_args[@]}"
+[[ $NOTIFY_POPUPS == on || $NOTIFY_POPUPS == off ]] || usage
+
+# Per-call timeouts also need an overall deadline: a dead daemon must not
+# multiply a five-second wait by every field of every notification.
+if [[ ${OMALINK_TIMED:-} != 1 ]]; then
+  case "${1:-}" in
+    status | conversations | dismiss-all)
+      export OMALINK_TIMED=1
+      exec timeout --kill-after=2s 45s "$0" "${original_args[@]}"
+      ;;
+  esac
+fi
 
 case "${1:-}" in
   status) status ;;
   watch) watch ;;
+  _posted) shift; handle_posted "${1:-}" "${2:-}" ;;
   media) shift; media "${1:-}" ;;
   media-action) shift; media_action "${1:-}" "${2:-}" ;;
   media-volume) shift; media_volume "${1:-}" "${2:-}" ;;
@@ -1107,7 +1127,7 @@ case "${1:-}" in
   attachment-save) shift; attachment_save "${1:-}" ;;
   reply) shift; reply "${1:-}" "${2:-}" "${3:-}" ;;
   sms) shift; send_sms "${1:-}" "${2:-}" "${3:-}" ;;
-  seen) seen ;;
+  seen) seen "${2:-}" ;;
   mark-seen) shift; mark_seen "$@" ;;
   *) usage ;;
 esac

@@ -43,24 +43,25 @@ chmod +x "$temp_dir/kdeconnect-cli"
 cat >"$temp_dir/busctl" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$0.all.log"
-if [[ " $* " == *" replyToConversation "* || " $* " == *" sendReply "* || " $* " == *" requestAttachmentFile "* ]]; then
+if [[ " $* " == *" requestConversation "* || " $* " == *" replyToConversation "* || " $* " == *" sendReply "* || " $* " == *" requestAttachmentFile "* ]]; then
   exit 0
 fi
+if [[ " $* " == *"/mprisremote/mprisremote "* ]]; then exit 1; fi
 if [[ " $* " == *" monitor "* ]]; then
   if [[ -n ${OMALINK_TEST_FLOOD:-} ]]; then
     head -c 20000000 /dev/zero | tr '\0' 'F'
   fi
   if [[ -n ${OMALINK_TEST_HUGE_BODY:-} ]]; then
     bigbody="$(head -c 20000 /dev/zero | tr '\0' 'B')"
-    printf '{"type":"signal","interface":"org.kde.kdeconnect.device.conversations","member":"conversationUpdated","payload":{"data":[{"data":[1,"%s",[["+155****0001"]],1,1,0,7,10,-1,[]]}]}}\n' "$bigbody"
+    printf '{"type":"signal","path":"/modules/kdeconnect/devices/abc123","interface":"org.kde.kdeconnect.device.conversations","member":"conversationUpdated","payload":{"data":[{"data":[1,"%s",[["+155****0001"]],1,1,0,7,10,-1,[]]}]}}\n' "$bigbody"
   fi
   if [[ -n ${OMALINK_TEST_MANY_MESSAGES:-} ]]; then
     for index in $(seq 1 300); do
-      printf '{"type":"signal","interface":"org.kde.kdeconnect.device.conversations","member":"conversationUpdated","payload":{"data":[{"data":[1,"body %s",[["+155****0001"]],%s,1,0,7,10,-1,[]]}]}}\n' \
+      printf '{"type":"signal","path":"/modules/kdeconnect/devices/abc123","interface":"org.kde.kdeconnect.device.conversations","member":"conversationUpdated","payload":{"data":[{"data":[1,"body %s",[["+155****0001"]],%s,1,0,7,10,-1,[]]}]}}\n' \
         "$index" "$index"
     done
   fi
-  printf '{"type":"signal","interface":"org.kde.kdeconnect.device.conversations","member":"attachmentReceived","payload":{"data":["%s","PART_1.jpeg"]}}\n' "$OMALINK_TEST_ATTACHMENT"
+  printf '{"type":"signal","path":"/modules/kdeconnect/devices/abc123","interface":"org.kde.kdeconnect.device.conversations","member":"attachmentReceived","payload":{"data":["%s","PART_1.jpeg"]}}\n' "$OMALINK_TEST_ATTACHMENT"
   sleep 3
   exit 0
 fi
@@ -603,83 +604,52 @@ if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" media-seek def456 1000 >
   exit 1
 fi
 
-[[ "$(XDG_STATE_HOME="$temp_dir/state" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" seen)" == "{}" ]]
-XDG_STATE_HOME="$temp_dir/state" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" mark-seen 7 2000 9 1500
-XDG_STATE_HOME="$temp_dir/state" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" mark-seen 7 2500
+[[ "$(XDG_STATE_HOME="$temp_dir/state" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" seen abc123)" == "{}" ]]
+XDG_STATE_HOME="$temp_dir/state" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" mark-seen abc123 7 2000 9 1500
+XDG_STATE_HOME="$temp_dir/state" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" mark-seen abc123 7 2500
 jq -e '."7" == 2500 and ."9" == 1500' \
-  <<<"$(XDG_STATE_HOME="$temp_dir/state" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" seen)" >/dev/null
-if XDG_STATE_HOME="$temp_dir/state" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" mark-seen 7 >/dev/null 2>&1; then
+  <<<"$(XDG_STATE_HOME="$temp_dir/state" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" seen abc123)" >/dev/null
+if XDG_STATE_HOME="$temp_dir/state" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" mark-seen abc123 7 >/dev/null 2>&1; then
   echo "odd mark-seen arguments were accepted" >&2
   exit 1
 fi
-if XDG_STATE_HOME="$temp_dir/state" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" mark-seen abc 100 >/dev/null 2>&1; then
+if XDG_STATE_HOME="$temp_dir/state" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" mark-seen abc123 abc 100 >/dev/null 2>&1; then
   echo "invalid mark-seen thread id was accepted" >&2
   exit 1
 fi
 
-# The watcher reaps only its own orphaned dbus-monitor, never an unrelated pid.
-sleep 60 &
-bystander=$!
-printf '%s\n' "$bystander" >"$temp_dir/omalink-watch.pid"
+# The watcher uses private runtime state, never edits KDE Connect config, and
+# never displays phone titles/bodies (including authenticator codes).
 watch_out="$(XDG_RUNTIME_DIR="$temp_dir" XDG_CONFIG_HOME="$temp_dir/xdg" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" watch)"
-if ! kill -0 "$bystander" 2>/dev/null; then
-  echo "the watcher killed an unrelated process" >&2
-  exit 1
-fi
-kill "$bystander" 2>/dev/null || true
-[[ -s "$temp_dir/omalink-watch.pid" ]]
 [[ $watch_out == $'posted abc123 notif.9\nposted abc123 notif.10\nposted abc123 notif.11' ]]
-grep -q '^\[Event/notification\]$' "$temp_dir/xdg/kdeconnect.notifyrc"
-grep -q '^Action=$' "$temp_dir/xdg/kdeconnect.notifyrc"
+[[ ! -e "$temp_dir/xdg/kdeconnect.notifyrc" ]]
 grep -q 'default=Open' "$temp_dir/notify-send.log"
-grep -q '&lt;img src="http://192.168.1.1/x.png"&gt;' "$temp_dir/notify-send.log"
-grep -q '&lt;b&gt;Bold&lt;/b&gt; &amp; Co' "$temp_dir/notify-send.log"
-if grep -q 'Tom & Jerry\|& Co' "$temp_dir/notify-send.log"; then
-  echo "an ampersand reached the popup unescaped" >&2
-  exit 1
+grep -q 'Open OmaLink to read it' "$temp_dir/notify-send.log"
+if grep -q 'Phone text\|Phone title\|<img\|<b>\|& Co' "$temp_dir/notify-send.log"; then
+  echo "phone content reached a popup" >&2; exit 1
 fi
-if grep -q '<img src=' "$temp_dir/notify-send.log"; then
-  echo "phone notification text reached the popup unescaped" >&2
-  exit 1
-fi
-grep -q 'New message' "$temp_dir/notify-send.log"
 [[ "$(grep -c '^notify ' "$temp_dir/notify-send.log")" == 2 ]]
 grep -q 'ipc call omalink.phone.DP-9 open' "$temp_dir/qs.log"
 : >"$temp_dir/notify-send.log"
-quiet_out="$(XDG_RUNTIME_DIR="$temp_dir" XDG_CONFIG_HOME="$temp_dir/xdg" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" watch --popups off)"
-[[ $quiet_out == $'posted abc123 notif.9\nposted abc123 notif.10\nposted abc123 notif.11' ]]
+quiet_out="$(XDG_RUNTIME_DIR="$temp_dir" XDG_CONFIG_HOME="$temp_dir/xdg" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --popups off watch)"
+[[ $quiet_out == "$watch_out" ]]
 [[ ! -s "$temp_dir/notify-send.log" ]]
-
-# An orphaned monitor is reaped, and only when it really is one.
-bash -c 'exec -a dbus-monitor sleep 60' &
-orphan=$!
-printf '%s\n' "$orphan" >"$temp_dir/omalink-watch.pid"
-: >"$temp_dir/notify-send.log"
-XDG_RUNTIME_DIR="$temp_dir" XDG_CONFIG_HOME="$temp_dir/xdg" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" watch >/dev/null
-if kill -0 "$orphan" 2>/dev/null; then
-  echo "the watcher left its orphaned monitor running" >&2
-  kill "$orphan" 2>/dev/null || true
-  exit 1
+# A predictable pid is no longer read, and a lock symlink is refused.
+sleep 60 &
+bystander=$!
+printf '%s\n' "$bystander" >"$temp_dir/omalink-watch.pid"
+printf 'keep me\n' >"$temp_dir/victim.txt"
+rm "$temp_dir/omalink-watch.lock"
+ln -s "$temp_dir/victim.txt" "$temp_dir/omalink-watch.lock"
+if XDG_RUNTIME_DIR="$temp_dir" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" watch >/dev/null 2>&1; then
+  echo "a watch lock symlink was accepted" >&2; exit 1
 fi
-
-# A symlink planted under the watcher's names must not become a file it writes
-# through, which is what a world-writable runtime directory allows.
-# Two victims, because the two writes differ: the pid is written (so an empty
-# target shows it) and the lock is only opened for writing (so a non-empty target
-# shows the truncation). A non-empty pid target would be removed by the
-# stale-reap path first and hide the guard.
-: >"$temp_dir/victim-empty.txt"
-printf 'keep me\n' >"$temp_dir/victim-full.txt"
-ln -sf "$temp_dir/victim-empty.txt" "$temp_dir/omalink-watch.pid"
-ln -sf "$temp_dir/victim-full.txt" "$temp_dir/omalink-watch.lock"
-XDG_RUNTIME_DIR="$temp_dir" XDG_CONFIG_HOME="$temp_dir/xdg" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" watch >/dev/null
-if [[ -s "$temp_dir/victim-empty.txt" ]]; then
-  echo "the watcher wrote through a planted pid symlink" >&2
-  exit 1
-fi
-if [[ "$(cat "$temp_dir/victim-full.txt")" != "keep me" ]]; then
-  echo "the watcher truncated a file through a planted lock symlink" >&2
-  exit 1
+[[ "$(cat "$temp_dir/victim.txt")" == "keep me" ]]
+kill -0 "$bystander"
+kill "$bystander"
+wait "$bystander" 2>/dev/null || true
+if env -u XDG_RUNTIME_DIR PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" watch >/dev/null 2>&1; then
+  echo "a watcher without a private runtime directory was accepted" >&2; exit 1
 fi
 if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" sms abc123 'bad;number' "Test" >/dev/null 2>&1; then
   echo "invalid SMS destination was accepted" >&2

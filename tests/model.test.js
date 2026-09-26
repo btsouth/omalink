@@ -193,4 +193,16 @@ assert.equal(model.conversationTitle({ addresses: ["+15551234567"], names: ["Ale
 assert.equal(model.conversationTitle({ addresses: ["Alex", "Sam"] }), "Alex +1")
 assert.equal(model.relativeTime(1000, 61000), "1m")
 
+
+// Package-only filters must survive the helper-to-panel boundary.
+assert.deepStrictEqual(model.visibleNotifications([
+  { appName: 'Localized name', packageName: 'com.example.messaging' }, null
+], 'com.example.messaging'), [{ appName: 'Localized name', packageName: 'com.example.messaging' }])
+assert.strictEqual(model.signalStrength({ connectivity: { strength: null } }), -1)
+const group = { threadId: 99, addresses: ['+15550000001', '+15550000002'], names: ['Group'] }
+const directSms = model.upsertConversationAfterSms([group], '+15550000001', 'Alex', 'Hello', 1000)
+assert.strictEqual(directSms.length, 2)
+assert.strictEqual(directSms[0].threadId, null)
+assert.strictEqual(directSms[1].threadId, 99)
+
 console.log("model tests passed")

@@ -13,6 +13,7 @@ Item {
   id: root
 
   property bool opened: false
+  property int generation: 0
   property string deviceId: ""
   property var conversations: []
   property var contacts: []
@@ -28,6 +29,7 @@ Item {
   property int pendingSyncAttempts: 0
   property var messages: []
   property var messageCache: ({})
+  property var cacheOrder: []
   property string loadingThreadId: ""
   property bool sending: false
   property string pendingReply: ""
@@ -57,7 +59,10 @@ Item {
   function open(payloadJson) {
     var payload = {}
     try { payload = JSON.parse(String(payloadJson || "{}")) || {} } catch (parseError) { payload = {} }
-    deviceId = String(payload.deviceId || "")
+    var nextDeviceId = String(payload.deviceId || "")
+    if (sending && nextDeviceId !== deviceId) return
+    if (!opened || nextDeviceId !== deviceId) close()
+    deviceId = nextDeviceId
     pendingOpenTitle = String(payload.conversationHint || "")
     pendingOpenThreadId = payload.threadId === undefined || payload.threadId === null
       ? "" : String(payload.threadId)
@@ -70,6 +75,14 @@ Item {
 
   function close() {
     opened = false
+    generation++
+    conversationProcess.running = false
+    contactProcess.running = false
+    threadProcess.running = false
+    attachmentProcess.running = false
+    replyField.text = ""
+    composeMessage.text = ""
+    loading = false
     conversations = []
     contacts = []
     selectedConversation = null
@@ -85,6 +98,7 @@ Item {
     refreshAfterNewMessage.stop()
     messages = []
     messageCache = ({})
+    cacheOrder = []
     loadingThreadId = ""
     searchText = ""
     pendingOpenTitle = ""
@@ -93,10 +107,8 @@ Item {
     attachmentFetchUnique = ""
     attachmentFetchMode = ""
     closeViewer()
-    if (!sending) {
-      pendingReply = ""
-      pendingThreadId = ""
-    }
+    pendingReply = ""
+    pendingThreadId = ""
     error = ""
   }
 
@@ -110,23 +122,25 @@ Item {
   }
 
   function refreshConversations() {
-    if (deviceId === "" || conversationProcess.running) return
+    if (!opened || deviceId === "" || conversationProcess.running) return
     if (!selectedConversation) loading = true
     error = ""
     conversationProcess.command = [helperPath, "conversations", deviceId]
+    conversationProcess.generation = generation
     conversationProcess.running = true
   }
 
   function refreshContacts() {
-    if (deviceId === "" || contactProcess.running) return
+    if (!opened || deviceId === "" || contactProcess.running) return
     contactProcess.command = [helperPath, "contacts", deviceId]
+    contactProcess.generation = generation
     contactProcess.running = true
   }
 
   function openThread(conversation) {
-    if (!conversation || threadProcess.running) return
+    if (!opened || !conversation || threadProcess.running) return
     if (conversation.unread && conversation.threadId !== null && conversation.threadId !== undefined)
-      Quickshell.execDetached([helperPath, "mark-seen",
+      Quickshell.execDetached([helperPath, "mark-seen", deviceId,
         String(conversation.threadId), String(Math.round(Number(conversation.timestamp) || 0))])
     var threadId = String(conversation.threadId)
     var changingThread = !selectedConversation
@@ -142,14 +156,20 @@ Item {
     loadingThreadId = threadId
     error = ""
     threadProcess.command = [helperPath, "messages", deviceId, threadId]
+    threadProcess.generation = generation
     threadProcess.running = true
   }
 
   function setThreadMessages(threadId, nextMessages) {
     messages = nextMessages
+    var key = String(threadId)
+    var order = cacheOrder.filter(function(item) { return item !== key }).concat([key]).slice(-5)
     var updatedCache = {}
-    for (var key in messageCache) updatedCache[key] = messageCache[key]
-    updatedCache[String(threadId)] = nextMessages
+    for (var i = 0; i < order.length; i++) {
+      if (order[i] !== key) updatedCache[order[i]] = messageCache[order[i]]
+    }
+    updatedCache[key] = nextMessages
+    cacheOrder = order
     messageCache = updatedCache
   }
 
@@ -190,6 +210,7 @@ Item {
     pendingNewBody = message
     error = ""
     newMessageProcess.command = [helperPath, "sms", deviceId, destination, message]
+    newMessageProcess.generation = generation
     newMessageProcess.running = true
   }
 
@@ -198,6 +219,7 @@ Item {
   function openAttachmentExternally(path) {
     if (path === "" || openProcess.running) return
     openProcess.command = [helperPath, "attachment-open", String(path)]
+    openProcess.generation = generation
     openProcess.running = true
   }
 
@@ -206,7 +228,11 @@ Item {
     var unique = String(attachment.unique || "")
     if (unique === "") return
     var isImage = Model.attachmentKind(attachment.mimeType) === "image"
-    var cached = attachmentPaths[unique] || ""
+    var cached = attachmentPaths["$" + unique] || ""
+    if (attachmentProcess.running && attachmentFetchUnique !== unique) {
+      error = "Still fetching another attachment…"
+      return
+    }
     if (isImage) {
       viewerOpen = true
       viewerStatus = ""
@@ -225,6 +251,7 @@ Item {
     attachmentFetchMode = isImage ? "view" : "open"
     attachmentProcess.command = [helperPath, "attachment", deviceId, String(attachment.partId), unique,
       isImage ? "image" : "file"]
+    attachmentProcess.generation = generation
     attachmentProcess.running = true
   }
 
@@ -242,6 +269,7 @@ Item {
     pendingThreadId = String(selectedConversation.threadId)
     error = ""
     replyProcess.command = [helperPath, "reply", deviceId, String(selectedConversation.threadId), message]
+    replyProcess.generation = generation
     replyProcess.running = true
   }
 
@@ -257,9 +285,11 @@ Item {
 
   Process {
     id: conversationProcess
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
+    property int generation: -1
+    readonly property bool current: root.opened && generation === root.generation
+    stdout: SplitParser {
+      onRead: function(text) {
+        if (!conversationProcess.current) return
         var fetched = Model.parseConversations(text)
         if (root.pendingConversation) {
           var merged = Model.mergePendingConversation(fetched, root.pendingConversation)
@@ -284,9 +314,10 @@ Item {
     }
     stderr: StdioCollector {
       waitForEnd: true
-      onStreamFinished: if (String(text || "").trim() !== "") root.error = "Could not load messages"
+      onStreamFinished: if (conversationProcess.current && String(text || "").trim() !== "") root.error = "Could not load messages"
     }
     onExited: function(exitCode) {
+      if (!conversationProcess.current) { if (root.opened) Qt.callLater(root.refreshConversations); return }
       root.loading = false
       if (exitCode !== 0) root.error = "Could not load messages"
     }
@@ -294,20 +325,32 @@ Item {
 
   Process {
     id: contactProcess
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: root.contacts = Model.parseContacts(text)
+    property int generation: -1
+    readonly property bool current: root.opened && generation === root.generation
+    stdout: SplitParser {
+      onRead: function(text) { if (contactProcess.current) root.contacts = Model.parseContacts(text) }
     }
+    onExited: if (root.opened && !current) Qt.callLater(root.refreshContacts)
   }
 
   Process {
     id: newMessageProcess
+    property int generation: -1
+    readonly property bool current: root.opened && generation === root.generation
     stderr: StdioCollector {
       waitForEnd: true
-      onStreamFinished: if (String(text || "").trim() !== "") root.error = "Could not send message"
+      onStreamFinished: if (newMessageProcess.current && String(text || "").trim() !== "") root.error = "Could not send message"
     }
     onExited: function(exitCode) {
       root.sending = false
+      if (!newMessageProcess.current) {
+        root.pendingReply = ""
+        root.pendingThreadId = ""
+        root.pendingNewNumber = ""
+        root.pendingNewName = ""
+        root.pendingNewBody = ""
+        return
+      }
       if (exitCode !== 0) {
         root.pendingNewNumber = ""
         root.pendingNewName = ""
@@ -354,12 +397,22 @@ Item {
 
   Process {
     id: replyProcess
+    property int generation: -1
+    readonly property bool current: root.opened && generation === root.generation
     stderr: StdioCollector {
       waitForEnd: true
-      onStreamFinished: if (String(text || "").trim() !== "") root.error = "Could not send reply"
+      onStreamFinished: if (replyProcess.current && String(text || "").trim() !== "") root.error = "Could not send reply"
     }
     onExited: function(exitCode) {
       root.sending = false
+      if (!replyProcess.current) {
+        root.pendingReply = ""
+        root.pendingThreadId = ""
+        root.pendingNewNumber = ""
+        root.pendingNewName = ""
+        root.pendingNewBody = ""
+        return
+      }
       if (exitCode !== 0) {
         root.pendingReply = ""
         root.pendingThreadId = ""
@@ -392,9 +445,11 @@ Item {
 
   Process {
     id: attachmentProcess
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
+    property int generation: -1
+    readonly property bool current: root.opened && generation === root.generation
+    stdout: SplitParser {
+      onRead: function(text) {
+        if (!attachmentProcess.current) return
         // Only the trailing newline comes off: a trailing space is part of the
         // phone's file name.
         var path = String(text || "").replace(/[\r\n]+$/, "")
@@ -402,7 +457,7 @@ Item {
         var unique = root.attachmentFetchUnique
         var updated = {}
         for (var key in root.attachmentPaths) updated[key] = root.attachmentPaths[key]
-        updated[unique] = path
+        updated["$" + unique] = path
         root.attachmentPaths = updated
         if (root.attachmentFetchMode === "view") {
           if (root.viewerOpen && root.viewerPath === "") root.viewerPath = path
@@ -413,6 +468,7 @@ Item {
     }
     stderr: StdioCollector { waitForEnd: true }
     onExited: function(exitCode) {
+      if (!attachmentProcess.current) return
       if (exitCode !== 0) {
         if (root.viewerOpen && root.viewerPath === "") root.viewerOpen = false
         root.error = "Could not fetch the attachment from the phone"
@@ -422,37 +478,46 @@ Item {
 
   Process {
     id: openProcess
+    property int generation: -1
+    readonly property bool current: root.opened && generation === root.generation
     stderr: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
+        if (!openProcess.current) return
         var message = String(text || "").trim()
         if (message !== "") root.error = message
       }
     }
     onExited: function(exitCode) {
+      if (!openProcess.current) return
       if (exitCode !== 0 && root.error === "") root.error = "OmaLink will not open this file"
     }
   }
 
   Process {
     id: saveProcess
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
+    property int generation: -1
+    readonly property bool current: root.opened && generation === root.generation
+    stdout: SplitParser {
+      onRead: function(text) {
+        if (!saveProcess.current) return
         var target = String(text || "").trim()
         if (target !== "") root.viewerStatus = "Saved to " + target
       }
     }
     onExited: function(exitCode) {
+      if (!saveProcess.current) return
       if (exitCode !== 0) root.viewerStatus = "Could not save the image"
     }
   }
 
   Process {
     id: threadProcess
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
+    property int generation: -1
+    readonly property bool current: root.opened && generation === root.generation
+    stdout: SplitParser {
+      onRead: function(text) {
+        if (!threadProcess.current) return
         if (!root.selectedConversation
             || String(root.selectedConversation.threadId) !== root.loadingThreadId) return
         var fetched = Model.parseMessages(text)
@@ -470,9 +535,10 @@ Item {
     }
     stderr: StdioCollector {
       waitForEnd: true
-      onStreamFinished: if (String(text || "").trim() !== "") root.error = "Could not load conversation"
+      onStreamFinished: if (threadProcess.current && String(text || "").trim() !== "") root.error = "Could not load conversation"
     }
     onExited: function(exitCode) {
+      if (!threadProcess.current) return
       root.loading = false
       if (exitCode !== 0) root.error = "Could not load conversation"
     }
@@ -559,6 +625,7 @@ Item {
                 ? Model.conversationTitle(root.selectedConversation)
                 : (root.composing ? "New message" : "Messages")
               textFormat: Text.PlainText
+              elide: Text.ElideRight
               color: root.foreground
               font.family: root.fontFamily
               font.pixelSize: Style.font.display
@@ -887,6 +954,7 @@ Item {
                     Layout.fillWidth: true
                     readOnly: true
                     selectByMouse: true
+                    textFormat: TextEdit.PlainText
                     text: modelData.body !== ""
                       ? modelData.body
                       : (bubble.attachments.length === 0 && modelData.attachmentCount > 0 ? "Attachment" : "")
@@ -1166,6 +1234,7 @@ Item {
               bordered: true
               onClicked: {
                 saveProcess.command = [root.helperPath, "attachment-save", root.viewerPath]
+                saveProcess.generation = root.generation
                 saveProcess.running = true
               }
             }
