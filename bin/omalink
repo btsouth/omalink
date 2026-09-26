@@ -975,6 +975,8 @@ conversation_list_json() {
   jq -c --slurpfile contactsFile "$contacts_file" '
     $contactsFile[0] as $contacts |
     def phone_key: gsub("[^0-9]"; "") | sub("^0+"; "");
+    def phone_suffixes($key):
+      range(0; (($key | length) - 6)) as $offset | $key[$offset:];
     ($contacts | reduce .[] as $contact ({};
       ($contact.number | phone_key) as $key
       | if $key == "" then .
@@ -982,6 +984,15 @@ conversation_list_json() {
           if .[$key] == $contact.name then . else .[$key] = null end
         else .[$key] = $contact.name
         end)) as $contactNames
+    | ($contacts | reduce .[] as $contact ({};
+      ($contact.number | phone_key) as $key
+      | if $key == "" then .
+        else reduce phone_suffixes($key) as $suffix (.;
+          if has($suffix) then
+            if .[$suffix] == $contact.name then . else .[$suffix] = null end
+          else .[$suffix] = $contact.name
+          end)
+        end)) as $contactSuffixes
     |
     def display_name:
       . as $address
@@ -991,8 +1002,11 @@ conversation_list_json() {
           ([range(0; (($key | length) - 6)) as $offset
             | $key[$offset:] as $suffix
             | select($contactNames | has($suffix))
-            | {found: true, name: $contactNames[$suffix]}][0] // {found: false}) as $match
-          | if $match.found then ($match.name // $address) else $address end
+            | $contactNames[$suffix]] | unique) as $directNames
+          | ($contactSuffixes | has($key)) as $inverseFound
+          | ([$directNames[],
+              (if $inverseFound then $contactSuffixes[$key] else empty end)] | unique) as $names
+          | if ($names | length) == 1 and $names[0] != null then $names[0] else $address end
         end;
     [.data[0][]? | .data as $message | {
       threadId: $message[6],
