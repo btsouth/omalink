@@ -282,6 +282,8 @@ The private D-Bus fixture also needs the development-only `python-gobject` packa
 
 ```sh
 node tests/model.test.js
+node tests/provider-model.test.js
+node tests/private-text.test.js
 node tests/send-state.test.js
 node tests/capabilities.test.js
 node tests/file-share-model.test.js
@@ -297,6 +299,7 @@ omabox run -- bash tests/files.test.sh
 omabox run -- bash tests/runtime.test.sh
 omabox run -- bash tests/selection-runtime.test.sh
 omabox run -- bash tests/send-runtime.test.sh
+omabox run -- bash tests/provider-runtime.test.sh
 omabox run -- bash tests/private-request-runtime.test.sh
 omabox run -- bash tests/file-share-runtime.test.sh
 ```

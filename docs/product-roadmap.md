@@ -1,8 +1,10 @@
 # OmaLink product review and proposed roadmap
 
-Reviewed September 25, 2026 against the local marketplace-audit candidate.
-This is a product proposal, not an implementation or a claim of phone-tested
-compatibility. The marketplace fixes remain a separate local candidate.
+Initial review snapshot from September 25, 2026, against the then-local
+marketplace-audit candidate. Several foundational changes have since merged.
+See the [implementation plan](implementation-plan.md) for landed work and open
+acceptance gates. This proposal and source review do not establish phone-tested
+compatibility.
 
 ## Direction
 
@@ -33,7 +35,7 @@ Keyboard navigation, accessible names, visible focus, scaling, long text,
 international phone numbers and translation readiness belong in every phase.
 They should not be deferred until after adding features.
 
-## What current source shows
+## What the initial source review showed
 
 - `Panel.qml` renders several device cards but messages, unread state and
   notifications repeatedly use `devices[0]`. Device selection is a correctness
@@ -145,7 +147,7 @@ verify the maintained phone client: the original official
 
 ## Implementation sequence
 
-1. Finish the current marketplace candidate's real-phone acceptance and review
+1. Finish the marketplace candidate's real-phone acceptance and review
    process independently of feature expansion. It remains local pending the
    owner's next instruction.
 2. Add stable selected devices, capability-aware setup, honest send outcomes and
