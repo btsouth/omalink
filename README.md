@@ -89,7 +89,7 @@ network. OmaLink never installs packages itself.
 
 ## Share files
 
-Select a phone, expand **Share files**, choose one or more files, review the
+Select a phone, press **Files**, choose one or more files, review the
 preview and press **Send files**. Selecting files does not submit them. Switching
 phones or losing file-sharing availability clears the selection. A submitted
 request keeps its original destination and is never retried automatically.
@@ -116,24 +116,26 @@ bin/omalink-files DEVICE_ID '/absolute/path/first file.pdf' '/absolute/path/phot
 
 ## Connection setup and diagnostics
 
-The panel lists up to eight known KDE Connect devices, including paired offline
-phones and discovered devices awaiting pairing. Selecting an offline phone keeps
-that destination selected. It does not send actions to another phone. Pair new
-devices through **Manage devices**; OmaLink does not change packages, firewalls,
-network settings or KDE Connect plugin settings.
+The panel's header shows the selected phone with its connection, battery and
+signal. When KDE Connect knows more than one device, a phone list lists up to
+eight of them, including paired offline phones and discovered devices awaiting
+pairing. Selecting an offline phone keeps that destination selected. It does not
+send actions to another phone. Pair new devices through **Manage devices**;
+OmaLink does not change packages, firewalls, network settings or KDE Connect
+plugin settings.
 
-The selected phone shows which tasks its KDE Connect plugins support, which are
-disabled, and which cannot be confirmed. Available means the backend reports a
+**Setup** at the bottom of the panel shows which tasks the selected phone's KDE
+Connect plugins support, which are disabled, and which cannot be confirmed. Available means the backend reports a
 loaded, enabled plugin for a paired, reachable device. It does not prove phone
 permissions or successful delivery. Failed or outdated status pauses actions.
 
 Android messaging remains the supported messaging path. An iPhone with KDE
 Connect can expose a different set of tasks; keep its app open while connecting.
 The [upstream iOS limitations](https://github.com/KDE/kdeconnect-ios/blob/master/README.md)
-explain its background behavior. BlueFerry and Mac messaging integration remain
-planned work.
+explain its background behavior. BlueFerry sending and Mac messaging integration
+remain planned work.
 
-**Connection diagnostics** shows a selectable report with backend version,
+**Diagnostics** shows a selectable report with backend version,
 pairing/reachability and plugin state. It excludes phone names and IDs, addresses,
 contacts, message bodies, notification text, media titles, file paths and tokens.
 To save the same bounded report from a checkout:
@@ -164,8 +166,9 @@ you configured yourself.
 ## Messaging notes
 
 The panel remembers your selected phone for messages and notifications. A single
-available phone is selected initially; with several phones, choose **Use this
-phone**. Disconnecting the selected phone does not switch to another one.
+available phone is selected initially; with several phones, press **Use** next
+to one in the phone list. Disconnecting the selected phone does not switch to
+another one.
 The selected ID and last known name are stored in the widget's `shell.json`
 settings. Switching phones clears unsent panel share/notification-reply drafts.
 Actions pause when status cannot be refreshed; an unavailable selected phone
