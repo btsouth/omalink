@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0 - Unreleased
+## 0.4.0 - 2026-10-01
 
 - Combine SMS notification and unread history rows in one Messages inbox.
 - Open a message row before marking it seen; reserve notification dismissal for Clear.
