@@ -105,7 +105,8 @@ ShellRoot {
         test.check(test.phone !== null, "actual Service not loaded")
         if (!test.phone.statusReady || test.phone.devices.length !== 2) return
         test.check(panel.activePhoneId === "abc123", "saved phone not selected")
-        test.check(test.apps(panel.notifications) === "Messages", "legacy source filter changed: " + test.apps(panel.notifications))
+        test.check(test.apps(panel.phoneNotifications) === "Messages", "legacy source filter changed: " + test.apps(panel.phoneNotifications))
+        test.check(panel.messageEntries.length === 1 && panel.notifications.length === 0, "SMS was duplicated outside Messages")
         test.check(panel.notificationSources.examined === 3 && panel.notificationSources.hidden === 2, "scan summary lost")
         test.check(test.rows() === "pkg:com.example.chat=default,pkg:com.google.android.apps.messaging=default,app:Signal=default",
           "observed rows wrong: " + test.rows())
@@ -124,7 +125,7 @@ ShellRoot {
         test.allowedAt = Date.now()
       } else if (test.step === 1) {
         // The watcher restarts after five quiet seconds; let it pick up the rule.
-        if (test.apps(panel.notifications) !== "Chat,Messages" || Date.now() - test.allowedAt < 6000) return
+        if (test.apps(panel.phoneNotifications) !== "Chat,Messages" || Date.now() - test.allowedAt < 6000) return
         Quickshell.execDetached(["touch", test.work + "/slow"])
       } else if (test.step === 2) {
         test.phone.refresh()
@@ -134,14 +135,14 @@ ShellRoot {
         test.check(test.saved.notifyAppRules === undefined, "last rule left an empty entry")
         // The panel applies the helper's source filter itself, so Default hides
         // Chat at once instead of waiting for the next read.
-        test.check(test.apps(panel.notifications) === "Messages", "Default waited for the helper: " + test.apps(panel.notifications))
+        test.check(test.apps(panel.phoneNotifications) === "Messages", "Default waited for the helper: " + test.apps(panel.phoneNotifications))
         Quickshell.execDetached(["rm", "-f", test.work + "/slow"])
       } else if (test.step === 3) {
         if (test.phone.refreshing || test.appliedAfterRevert === 0) return
         test.check(!test.staleApplied, "status read under the old policy restored a hidden app")
-        test.check(test.apps(panel.notifications) === "Messages", "revert not applied: " + test.apps(panel.notifications))
+        test.check(test.apps(panel.phoneNotifications) === "Messages", "revert not applied: " + test.apps(panel.phoneNotifications))
         panel.setNotificationRule("pkg:com.google.android.apps.messaging", "mute", "Messages")
-        test.check(panel.notifications.length === 0, "mute waited for the helper")
+        test.check(panel.phoneNotifications.length === 0, "mute waited for the helper")
         test.check(panel.notificationSectionVisible, "filtered-empty section hidden")
         test.check(panel.notificationSummary[0] === "3 phone notifications are hidden by your filters.",
           "filtered-empty not explained: " + panel.notificationSummary.join("|"))
@@ -151,11 +152,11 @@ ShellRoot {
         if (test.phone.actionBusy || test.phone.refreshing) return
         test.check(test.rows() === "pkg:com.example.chat=default,pkg:com.google.android.apps.messaging=mute,app:Signal=mute",
           "rule states wrong: " + test.rows())
-        test.check(panel.notificationSources.hidden === 3 && panel.notifications.length === 0, "helper did not apply mutes")
+        test.check(panel.notificationSources.hidden === 3 && panel.phoneNotifications.length === 0, "helper did not apply mutes")
         // Rules belong to one phone.
         panel.selectDevice("def456")
         test.check(Object.keys(panel.activePhoneRules).length === 0, "another phone's rules applied")
-        test.check(test.apps(panel.notifications) === "Messages", "second phone lost its notifications")
+        test.check(test.apps(panel.phoneNotifications) === "Messages", "second phone lost its notifications")
         test.check(test.rows().indexOf("mute") === -1, "second phone shows the first phone's rules")
         panel.selectDevice("abc123")
         test.check(Object.keys(panel.activePhoneRules).length === 2, "rules lost after switching back")
@@ -209,7 +210,7 @@ ShellRoot {
         test.check(test.saved.notifyAppRules === undefined && Object.keys(panel.activePhoneRules).length === 0, "reset kept rules")
       } else if (test.step === 7) {
         if (test.phone.refreshing) return
-        test.check(test.apps(panel.notifications) === "Messages", "reset did not restore the source filter")
+        test.check(test.apps(panel.phoneNotifications) === "Messages", "reset did not restore the source filter")
         // A status process that cannot start must not block later reads.
         Quickshell.execDetached(["chmod", "-x", test.work + "/bin/omalink"])
       } else if (test.step === 8) {

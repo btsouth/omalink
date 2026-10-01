@@ -1,6 +1,17 @@
 # Changelog
 
-## 0.3.0 - Unreleased
+## 0.4.0 - Unreleased
+
+- Combine SMS notification and unread history rows in one Messages inbox.
+- Open a message row before marking it seen; reserve notification dismissal for Clear.
+- Update conversations on phone events; coalesce bursts and retain scroll position.
+- Simplify send labels, show details beside each message, and reconcile whole-second SMS timestamps.
+- Add a multiline reply composer, date separators and a larger conversation view.
+- Show only a confidently detected authentication code in a short-lived popup
+  with a Copy code button. Ordinary notification text stays out of popups, and
+  copied codes carry a sensitive clipboard hint so Omarchy history skips them.
+
+## 0.3.0 - 2026-09-26
 
 - Stop the notification monitor when the shell kills its watcher, instead of
   leaving it running for up to an hour, and remove work directories left by

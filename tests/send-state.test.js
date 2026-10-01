@@ -29,7 +29,7 @@ assert.equal(state.reconcile([accepted], "phone", 7, [fresh], 1200)[0].state, "a
 const confirmed = state.reconcile([accepted], "phone", 7, [old, fresh])[0]
 assert.equal(confirmed.state, "confirmed-in-history")
 assert.equal(state.messages([old, fresh], thread, [confirmed]).length, 2)
-assert.match(state.label(confirmed.state), /delivery not verified/)
+assert.match(state.detail(confirmed.state), /delivery not verified/)
 
 // One record cannot confirm two identical sends, including subsequent refreshes.
 const second = state.finish(state.create("two", "phone", thread, "", "repeat", 1000, [old]), 0, 1001, 30000)
@@ -75,3 +75,17 @@ assert.equal(state.updateThreadPreview([{...thread, preview: "old", timestamp: 9
 assert.equal(state.updateThreadPreview([{...thread, preview: "newer", timestamp: 5000}], 7, [fresh])[0].preview, "newer")
 assert.equal(submitted.state, "submitting", "transitions leave prior snapshots unchanged")
 console.log("send state tests passed")
+
+// SMS timestamps can be truncated to seconds while the desktop uses milliseconds.
+const roundedSend = state.finish(state.create("rounded", "phone", thread, "", "repeat", 1899, [old]), 0, 1900, 30000)
+const roundedRow = {...old, timestamp: 1000}
+assert.equal(state.reconcile([roundedSend], "phone", 7, [old, roundedRow], 2000)[0].state, "confirmed-in-history")
+assert.equal(state.reconcile([roundedSend], "phone", 7, [{...old, timestamp: 999}], 2000)[0].state, "accepted")
+const roundedBaseline = state.finish(state.create("known", "phone", thread, "", "repeat", 1899, [roundedRow]), 0, 1900, 30000)
+assert.equal(state.reconcile([roundedBaseline], "phone", 7, [roundedRow], 2000)[0].state, "accepted")
+assert.equal(state.label("accepted"), "Waiting for phone…")
+
+const roundedSecond = state.finish(state.create("rounded-two", "phone", thread, "", "repeat", 1950, [old]), 0, 1951, 30000)
+const roundedPair = state.reconcile([roundedSend, roundedSecond], "phone", 7, [roundedRow], 2000)
+assert.deepEqual(roundedPair.map(row => row.state), ["confirmed-in-history", "accepted"])
+assert.equal(state.pruneConfirmed(roundedPair, 2100).length, 2, "rounded row remains claimed by the first send")

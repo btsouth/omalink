@@ -39,5 +39,7 @@ jobs:
           done
       - name: Check QML source
         run: bash tests/qml.test.sh
+      - name: Test authentication code detection
+        run: python3 tests/mfa.test.py
       - name: Check shell scripts
         run: shellcheck -S warning bin/omalink bin/omalink-files tests/*.sh

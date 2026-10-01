@@ -1,0 +1,56 @@
+#!/usr/bin/python3
+"""Print one confidently identified authentication code from bounded stdin."""
+
+import re
+import sys
+
+
+CONTEXT = re.compile(
+    r"\b(?:verification|authentication|security|sign[ -]?in|log[ -]?in|"
+    r"one[ -]?time|two[ -]?factor)\s+(?:code|passcode|pin)\b"
+    r"|\b(?:2fa|mfa|otp|passcode)\b"
+    r"|\b(?:your|the)\s+code\b"
+    r"|\bcode\s*(?:is|:)",
+    re.IGNORECASE,
+)
+CODE = re.compile(r"(?<![\w])(?:[0-9]{4,8}|[0-9]{3}[ -][0-9]{3})(?![\w])")
+NON_AUTH = re.compile(r"\b(?:promo|coupon|discount|tracking|order|gift|referral)\s+code\b", re.IGNORECASE)
+REDACTED = re.compile(r"sensitive notification content hidden", re.IGNORECASE)
+
+
+def extract(text):
+    if len(text) > 10_000 or REDACTED.search(text) or NON_AUTH.search(text):
+        return None
+    context = list(CONTEXT.finditer(text))
+    if not context:
+        return None
+    candidates = list(CODE.finditer(text))
+    if len(candidates) != 1:
+        return None
+    candidate = candidates[0]
+    # A code may precede the label ("123456 is your verification code") or
+    # follow it. Nearby context prevents copying unrelated numbers in a long
+    # message, such as a phone number or transaction amount.
+    if not any(0 <= candidate.start() - match.end() <= 60
+               or 0 <= match.start() - candidate.end() <= 45 for match in context):
+        return None
+    return re.sub(r"[ -]", "", candidate.group())
+
+
+def main():
+    raw = sys.stdin.buffer.read(10_001)
+    if len(raw) > 10_000:
+        return 1
+    try:
+        text = raw.decode("utf-8", "strict")
+    except UnicodeDecodeError:
+        return 1
+    code = extract(text)
+    if not code:
+        return 1
+    sys.stdout.write(code + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

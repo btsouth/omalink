@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "omalink.phone",
   "name": "OmaLink",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "author": "OmaLink contributors",
   "license": "MIT",
   "description": "Native Android phone integration for Omarchy, powered by KDE Connect.",
@@ -54,7 +54,7 @@
           "Off"
         ],
         "defaultValue": "On",
-        "description": "Off keeps matching notifications listed in the panel without desktop popups."
+        "description": "Ordinary popups never show message text. A clear authentication code can appear in its own short-lived popup with Copy code. Off suppresses both kinds of popup while keeping matching notifications in the panel."
       },
       {
         "key": "mediaControls",
@@ -87,7 +87,7 @@
           "Hide"
         ],
         "defaultValue": "Show",
-        "description": "Hide unread message previews and notification contents in the panel, and keep text popups to the app name instead of the sender. Counts remain visible. Messages opened explicitly and other apps are unaffected."
+        "description": "Hide unread message previews and notification contents in the panel, and keep ordinary text popups to the app name instead of the sender. Authentication code popups are still shown when Notification popups is On. Counts remain visible. Messages opened explicitly and other apps are unaffected."
       }
     ]
   }

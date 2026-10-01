@@ -49,6 +49,8 @@ Item {
   signal selectionSuggested(string deviceId, string deviceName)
   // The watcher saw a new phone notification.
   signal phoneEvent()
+  signal messageEvent(string deviceId)
+  signal mfaCodeReceived(string code)
 
   readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 15, 5, 300)
   readonly property var notifySources: settings && settings["notifyApps"] !== undefined && settings["notifyApps"] !== null
@@ -231,10 +233,17 @@ Item {
   }
 
   function dismissNotification(deviceId, notificationId) {
-    if (!notificationId || actionBusy || !actionTarget(deviceId, "notifications")) return
+    dismissNotifications(deviceId, [notificationId])
+  }
+
+  function dismissNotifications(deviceId, notificationIds) {
+    var ids = notificationIds.filter(function(id, index, all) {
+      return /^[A-Za-z0-9_][A-Za-z0-9._:-]{0,127}$/.test(String(id)) && all.indexOf(id) === index
+    }).slice(0, 25)
+    if (ids.length === 0 || actionBusy || !actionTarget(deviceId, "notifications")) return
     actionStatus = "Dismissing notification…"
     actionSuccess = qsTr("Dismissal requested for %1").arg(Model.deviceById(devices, deviceId).name)
-    actionProcess.command = [helperPath, "dismiss", String(deviceId), String(notificationId)]
+    actionProcess.command = [helperPath, "dismiss", String(deviceId)].concat(ids)
     actionProcess.running = true
   }
 
@@ -325,7 +334,17 @@ Item {
     command: root.withNotify([root.helperPath, "watch"])
     running: true
     stdout: SplitParser {
-      onRead: {
+      onRead: function(line) {
+        var event = String(line || "").trim()
+        if (/^changed [A-Za-z0-9]{1,128}$/.test(event)) {
+          root.messageEvent(event.slice(8))
+          return
+        }
+        if (/^mfa [0-9]{4,8}$/.test(event)) {
+          root.mfaCodeReceived(event.slice(4))
+          return
+        }
+        if (!/^posted [A-Za-z0-9]{1,128} [A-Za-z0-9_][A-Za-z0-9._:-]{0,127}$/.test(event)) return
         root.refresh()
         root.phoneEvent()
       }

@@ -12,7 +12,7 @@ kdeconnect_service=org.kde.kdeconnect
 original_args=("$@")
 
 usage() {
-  echo "Usage: omalink [--notify-apps \"App, Package\"] [--notify-rules JSON] [--popups on|sender|off] <status|diagnostics|watch|media|media-action|media-volume|media-seek|ring|clipboard|text-stdin|dismiss|dismiss-all|contacts|conversations|conversations-cached|messages|attachment|attachment-open|attachment-save|seen|mark-seen> [arguments]" >&2
+  echo "Usage: omalink [--notify-apps \"App, Package\"] [--notify-rules JSON] [--popups on|sender|off] <status|diagnostics|watch|watch-messages|media|media-action|media-volume|media-seek|ring|clipboard|text-stdin|dismiss|dismiss-all|contacts|conversations|conversations-cached|messages|attachment|attachment-open|attachment-save|seen|mark-seen> [arguments]" >&2
   exit 2
 }
 
@@ -757,9 +757,8 @@ message_notification() {
 }
 
 handle_posted() {
-  local device_id="$1" notification_id="$2" notification_path app_name package_name title text silent summary body action
+  local device_id="$1" notification_id="$2" notification_path app_name package_name title text silent summary body action code
   [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ && $notification_id =~ ^[A-Za-z0-9_][A-Za-z0-9._:-]{0,127}$ ]] || return 0
-  sleep 0.3
   notification_path="/modules/kdeconnect/devices/$device_id/notifications/$notification_id"
   # On reconnect the phone re-sends every notification still in its shade and
   # the daemon re-posts each one flagged silent. Only new ones get a popup.
@@ -774,6 +773,14 @@ handle_posted() {
   # A notification dismissed between the signal and this read has no fields
   # left, and a popup with an empty title is worse than none.
   if [[ -z $title && -z $text && -z $app_name ]]; then
+    return 0
+  fi
+  # The shell renders MFA popups itself so they have a real Copy code button.
+  # Only the short code goes over the watcher's private stdout pipe. Neither
+  # the message nor the code is put in a child process argument or a log.
+  if code="$(printf '%s\n%s' "$title" "$text" \
+      | /usr/bin/python3 "$(dirname -- "$(readlink -f -- "$0")")/omalink-mfa")"; then
+    printf 'mfa %s\n' "$code"
     return 0
   fi
   summary="$(notify_escape "${app_name:-Phone notification}")"
@@ -819,7 +826,11 @@ watch() {
   command -v dbus-monitor >/dev/null 2>&1 || { echo "dbus-monitor is required" >&2; exit 1; }
   command -v setpriv >/dev/null 2>&1 || { echo "setpriv from util-linux is required" >&2; exit 1; }
   # Never use shared /tmp names or trust a pid left by another process.
+  local mode="${1:-notifications}" namespace="omalink-watch"
+  [[ $mode != messages ]] || namespace="omalink-messages-watch"
   local runtime="${XDG_RUNTIME_DIR:-}" work monitor_pid="" pid line device_id="" notification_id
+  local -a matches=("type='signal',sender='org.kde.kdeconnect',interface='org.kde.kdeconnect.device.conversations',member='conversationLoaded'")
+  [[ $mode == messages ]] || matches+=("type='signal',sender='org.kde.kdeconnect',interface='org.kde.kdeconnect.device.notifications',member='notificationPosted'")
   local -a workers=() live=() options=(--popups "$NOTIFY_POPUPS")
   [[ -n $runtime && -d $runtime && ! -L $runtime && -O $runtime ]] || {
     echo "A private XDG_RUNTIME_DIR is required" >&2; exit 1;
@@ -827,16 +838,16 @@ watch() {
   [[ $(stat -c %a -- "$runtime") == 700 ]] || {
     echo "XDG_RUNTIME_DIR must have mode 700" >&2; exit 1;
   }
-  [[ ! -L $runtime/omalink-watch.lock ]] || exit 1
-  exec 9>>"$runtime/omalink-watch.lock"
+  [[ ! -L $runtime/$namespace.lock ]] || exit 1
+  exec 9>>"$runtime/$namespace.lock"
   flock 9
   # Holding the lock means no other watcher is alive, so any work directory
   # left here belongs to one that was killed before its trap could run.
   local stale
-  for stale in "$runtime"/omalink-watch.??????; do
+  for stale in "$runtime"/"$namespace".??????; do
     [[ -d $stale && ! -L $stale && -O $stale ]] && rm -rf -- "$stale"
   done
-  work="$(mktemp -d "$runtime/omalink-watch.XXXXXX")"
+  work="$(mktemp -d "$runtime/$namespace.XXXXXX")"
   cleanup_watch() {
     for pid in "$monitor_pid" "${workers[@]}"; do
       [[ -z $pid ]] || kill -KILL -- "-$pid" "$pid" 2>/dev/null || true
@@ -856,12 +867,19 @@ watch() {
   # parent-death signal makes the kernel stop the monitor too, instead of
   # leaving it running for up to an hour.
   setsid setpriv --pdeathsig TERM timeout --kill-after=1s 1h dbus-monitor --session \
-    "type='signal',sender='org.kde.kdeconnect',interface='org.kde.kdeconnect.device.notifications',member='notificationPosted'" \
+    "${matches[@]}" \
     >"$work/signals" 2>/dev/null 9>&- &
   monitor_pid=$!
   while IFS= read -r -n 4096 line; do
     case $line in
+      *"member=conversationLoaded"*)
+        device_id="${line#*path=/modules/kdeconnect/devices/}"
+        device_id="${device_id%%;*}"
+        [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ ]] && printf 'changed %s\n' "$device_id"
+        device_id=""
+        ;;
       *"member=notificationPosted"*)
+        [[ $mode != messages ]] || continue
         device_id="${line#*path=/modules/kdeconnect/devices/}"
         device_id="${device_id%%/*}"
         ;;
@@ -1393,6 +1411,7 @@ case "${1:-}" in
   status) status ;;
   diagnostics) status true ;;
   watch) watch ;;
+  watch-messages) watch messages ;;
   _posted) shift; handle_posted "${1:-}" "${2:-}" ;;
   media) shift; media "${1:-}" ;;
   media-action) shift; media_action "${1:-}" "${2:-}" ;;
@@ -1408,7 +1427,17 @@ case "${1:-}" in
     echo "Text arguments are no longer supported; use text-stdin with a JSON request" >&2
     exit 2
     ;;
-  dismiss) shift; dismiss_notification "${1:-}" "${2:-}" ;;
+  dismiss)
+    shift
+    (( $# >= 2 && $# <= 26 )) || usage
+    device_id="$1"; shift
+    # Validate the complete batch before dismissing any record.
+    [[ $device_id =~ ^[A-Za-z0-9]{1,128}$ ]] || usage
+    for notification_id in "$@"; do
+      [[ $notification_id =~ ^[A-Za-z0-9_][A-Za-z0-9._:-]{0,127}$ && $notification_id != . && $notification_id != .. ]] || usage
+    done
+    for notification_id in "$@"; do dismiss_notification "$device_id" "$notification_id"; done
+    ;;
   dismiss-all) shift; dismiss_all_notifications "${1:-}" ;;
   contacts) shift; contacts "${1:-}" ;;
   conversations) shift; conversations "${1:-}" ;;
