@@ -195,6 +195,12 @@ line. Date separators keep older messages distinct. Incoming message events
 update open conversations, with polling retained as a fallback. Reading older
 messages keeps your scroll position; **Latest messages** returns to the bottom.
 
+Messages opens as a normal desktop window titled **OmaLink Messages**. Tile,
+float, resize or pin it with your usual window controls, and leave it open while
+using other apps. Opening Messages again for the same phone brings the existing
+window forward and keeps its current conversation, draft and scroll position.
+Closing it clears the local session.
+
 SMS notifications and unread SMS history share one Messages section. A unique
 exact sender match combines them; an ambiguous sender stays visible separately.
 A notification can appear before its SMS history is available. Other app

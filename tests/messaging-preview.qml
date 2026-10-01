@@ -6,6 +6,13 @@ import "." as Plugin
 
 // Synthetic data only. Interactive visual/keyboard fixture for omabox.
 ShellRoot {
+  id: fixture
+  function messageWindow() {
+    for (var i = 0; i < messages.data.length; i++) {
+      if (messages.data[i].objectName === "messagesAppWindow") return messages.data[i]
+    }
+    return null
+  }
   QtObject {
     id: fakeShell
     function updateEntryInline(id, value) { return true }
@@ -43,6 +50,19 @@ ShellRoot {
   IpcHandler {
     target: "omalink-review"
     function ready(): string { return messages.messages.length > 0 ? "yes" : "no" }
+    function session(): string {
+      var window = fixture.messageWindow()
+      return JSON.stringify({opened: messages.opened, draft: messages.replyText,
+        generation: messages.generation, composing: messages.composing,
+        threadId: messages.selectedConversation ? messages.selectedConversation.threadId : null,
+        rows: messages.messages.length, operations: messages.sendOperations.length,
+        caches: Object.keys(messages.messageCache).length,
+        visible: window ? window.visible : false, minimized: window ? window.minimized : false})
+    }
+    function draft(text: string): void { messages.replyText = text }
+    function summon(): bool { return messages.open('{"deviceId":"fixture","deviceName":"Test phone"}') }
+    function summonThread(): bool { return messages.open('{"deviceId":"fixture","deviceName":"Test phone","threadId":7}') }
+    function minimize(value: bool): void { fixture.messageWindow().minimized = value }
     function navigation(): string {
       return JSON.stringify({panelOpen: panel.opened, messagesOpen: messages.opened,
         threadId: messages.selectedConversation ? messages.selectedConversation.threadId : null,

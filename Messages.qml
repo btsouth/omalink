@@ -21,6 +21,7 @@ Item {
   readonly property bool blueFerryEnabled: BlueFerry.enabledInBar(shell ? shell.barConfig : null)
   onBlueFerryEnabledChanged: if (!blueFerryEnabled && readOnlyProvider) close()
   property bool opened: false
+  onOpenedChanged: messagesWindow.visible = opened
   property int generation: 0
   property var endpoint: null
   readonly property string endpointKey: Providers.endpointKey(endpoint)
@@ -109,6 +110,15 @@ Item {
     var nextKey = Providers.endpointKey(nextEndpoint)
     if (sending && nextKey !== endpointKey) return false
     var nextOwner = nextEndpoint.provider === "blueferry" ? payload.backendOwner : ""
+    // A panel summon can bring back a long-lived window. Keep its current
+    // conversation, draft and scroll position when no new target was requested.
+    var sameSession = opened && nextKey === endpointKey && backendOwner === nextOwner
+    var sameThread = selectedConversation && payload.threadId !== undefined && payload.threadId !== null
+      && String(payload.threadId) === String(selectedConversation.threadId)
+    if (sameSession && (sameThread || ((payload.threadId === undefined || payload.threadId === null) && !payload.conversationHint))) {
+      presentWindow()
+      return true
+    }
     if (!opened || nextKey !== endpointKey || backendOwner !== nextOwner) close()
     endpoint = nextEndpoint
     backendOwner = nextOwner
@@ -119,11 +129,26 @@ Item {
       ? "" : String(payload.threadId)
     searchText = ""
     opened = true
+    presentWindow()
     refreshContacts()
     refreshCachedConversations()
     refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
     return true
+  }
+
+  function presentWindow() {
+    messagesWindow.visible = true
+    messagesWindow.minimized = false
+    // The shell shares one app ID across its windows. Match both that ID and
+    // our stable title, leaving tiling, placement and pinning to the compositor.
+    var windows = ToplevelManager.toplevels.values
+    for (var i = 0; i < windows.length; i++) {
+      if (windows[i].appId === Quickshell.appId && windows[i].title === messagesWindow.title) {
+        windows[i].activate()
+        break
+      }
+    }
   }
 
   function close() {
@@ -950,20 +975,18 @@ Item {
     }
   }
 
-  PanelWindow {
-    visible: root.opened
-    anchors { top: true; bottom: true; left: true; right: true }
-    color: "transparent"
-    exclusionMode: ExclusionMode.Ignore
-    WlrLayershell.namespace: "omalink-messages"
-    WlrLayershell.layer: WlrLayer.Overlay
-    WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
-
-    Rectangle {
-      anchors.fill: parent
-      color: Qt.rgba(0, 0, 0, 0.62)
-      MouseArea { anchors.fill: parent; onClicked: root.close() }
-    }
+  FloatingWindow {
+    id: messagesWindow
+    objectName: "messagesAppWindow"
+    visible: false
+    title: "OmaLink Messages"
+    color: Color.popups.background
+    implicitWidth: Style.space(620)
+    implicitHeight: Style.space(740)
+    minimumSize: Qt.size(Style.space(400), Style.space(420))
+    // Only an explicit window close tears down history and local send state.
+    // Losing focus or minimizing must leave the session alone.
+    onClosed: root.close()
 
     Item {
       id: keyCatcher
@@ -1000,17 +1023,14 @@ Item {
       }
 
       Rectangle {
-        anchors.centerIn: parent
-        width: Math.min(Style.space(620), parent.width - Style.space(48))
-        height: Math.min(Style.space(740), parent.height - Style.space(48))
+        anchors.fill: parent
         color: Color.popups.background
-        radius: Style.cornerRadius
-
-        MouseArea { anchors.fill: parent; onClicked: {} }
 
         ColumnLayout {
           anchors.fill: parent
           anchors.margins: Style.space(16)
+          anchors.leftMargin: Math.max(Style.space(16), (parent.width - Style.space(900)) / 2)
+          anchors.rightMargin: anchors.leftMargin
           spacing: Style.space(12)
 
           RowLayout {

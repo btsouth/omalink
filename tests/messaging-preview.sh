@@ -2,7 +2,7 @@
 # Run only inside omabox. Leaves the fixture running for screenshots/input.
 set -euo pipefail
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-work="$HOME/.local/state/omalink-preview"
+work="${OMALINK_PREVIEW_DIR:-$HOME/.local/state/omalink-preview}"
 mkdir -p "$work/bin"
 cp "$project_dir"/*.qml "$project_dir"/*.js "$work/"
 ln -sfn /usr/share/omarchy/shell/Commons "$work/Commons"
@@ -38,6 +38,7 @@ if command=='status':
    'backend':{'name':'kdeconnect','available':True,'version':'26.08.1','versionSource':'kdeconnect-cli'},'devices':[device]}))
 elif command in ['conversations','conversations-cached']: print(json.dumps([thread]))
 elif command=='messages':
+ with (root/'history-reads').open('a') as stream: stream.write('read\n')
  time.sleep(0.2)
  if (root/'fail-history').exists(): sys.exit(1)
  print(json.dumps(rows))

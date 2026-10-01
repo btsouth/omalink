@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Open Messages as a normal desktop window that can tile, float, resize and stay
+  open alongside other apps. Bring an existing window forward without losing
+  its current conversation or draft, and clear local state on explicit close.
+
 ## 0.4.0 - 2026-10-01
 
 - Combine SMS notification and unread history rows in one Messages inbox.
