@@ -65,6 +65,12 @@ function bindThreads(operations, conversations) {
   })
 }
 
+function timestampCanFollowSend(timestamp, operation) {
+  var stamp = Number(timestamp)
+  return stamp >= operation.timestamp
+    || (stamp % 1000 === 0 && stamp === Math.floor(operation.timestamp / 1000) * 1000)
+}
+
 function reconcile(operations, deviceId, threadId, history, now) {
   if (now === undefined) now = Date.now()
   var claimed = {}
@@ -79,7 +85,8 @@ function reconcile(operations, deviceId, threadId, history, now) {
     var match = historyOnly(history).find(function(row) {
       var key = fingerprint(row)
       return row.incoming === false && String(row.body || "") === operation.body
-        && Number(row.timestamp) >= operation.timestamp && Number(row.timestamp) <= now && !claimed[key]
+        && timestampCanFollowSend(row.timestamp, operation)
+        && Number(row.timestamp) <= now && !claimed[key]
         && operation.baseline.indexOf(Number(row.timestamp)) === -1
     })
     if (!match) return operation
@@ -101,7 +108,7 @@ function pruneConfirmed(operations, now) {
     return operations.some(function(other) {
       return (other.state === "accepted" || other.state === "unconfirmed")
         && other.deviceId === operation.deviceId && other.threadId === operation.threadId
-        && other.body === operation.body && other.timestamp <= stamp
+        && other.body === operation.body && timestampCanFollowSend(stamp, other)
     })
   })
 }
@@ -171,7 +178,7 @@ function conversations(history, operations) {
   return rows.sort(function(left, right) { return Number(right.timestamp) - Number(left.timestamp) })
 }
 
-function label(state) {
+function detail(state) {
   if (state === "submitting") return "Submitting…"
   if (state === "accepted") return "Accepted by KDE Connect · checking phone history"
   if (state === "confirmed-in-history") return "Matching message found in phone history · delivery not verified"
@@ -180,9 +187,18 @@ function label(state) {
   return ""
 }
 
+function label(state) {
+  if (state === "submitting") return "Sending…"
+  if (state === "accepted") return "Waiting for phone…"
+  if (state === "confirmed-in-history") return "In phone history"
+  if (state === "failed") return "Not sent"
+  if (state === "unconfirmed") return "Check phone"
+  return ""
+}
+
 if (typeof module !== "undefined") module.exports = {
   address: address, exactConversation: exactConversation, historyOnly: historyOnly,
   fingerprint: fingerprint, create: create, finish: finish, expire: expire,
   bindThreads: bindThreads, reconcile: reconcile, pruneConfirmed: pruneConfirmed, belongs: belongs,
-  messages: messages, conversations: conversations, updateThreadPreview: updateThreadPreview, label: label
+  messages: messages, conversations: conversations, updateThreadPreview: updateThreadPreview, label: label, detail: detail
 }

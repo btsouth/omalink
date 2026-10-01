@@ -59,7 +59,7 @@ ShellRoot {
       if (test.peer) test.peer.settings = JSON.parse(JSON.stringify(value))
       return changed
     }
-    function summon(id, value) { test.launched = value }
+    function summon(id, value) { test.launched = value; return true }
   }
   QtObject {
     id: fakeBar

@@ -15,6 +15,7 @@ for test in tests/*.test.js; do
   node "$test"
 done
 bash tests/qml.test.sh
+python3 tests/mfa.test.py
 shellcheck -S warning bin/omalink bin/omalink-files tests/*.sh
 ```
 
@@ -40,6 +41,10 @@ omabox run -- /usr/bin/python3 tests/capabilities.test.py
 omabox run -- bash tests/files.test.sh
 omabox run -- bash tests/runtime.test.sh
 omabox run -- bash tests/selection-runtime.test.sh
+omabox run -- bash tests/refresh-runtime.test.sh
+omabox run -- bash tests/message-events-runtime.test.sh
+omabox run -- bash tests/messaging-navigation.test.sh
+omabox run -- bash tests/mfa-runtime.test.sh
 omabox run -- bash tests/send-runtime.test.sh
 omabox run -- bash tests/provider-runtime.test.sh
 omabox run -- bash tests/provider-request-runtime.test.sh

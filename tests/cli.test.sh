@@ -212,6 +212,8 @@ case "${*: -1}" in
     if [[ -n ${OMALINK_TEST_LONG_TITLE:-} ]]; then
       long="$(head -c 20000 /dev/zero | tr '\0' 'X')"
       printf '{"type":"s","data":"%s"}\n' "$long"
+    elif [[ -n ${OMALINK_TEST_MFA:-} && " $* " == *"/notif.11 "* ]]; then
+      printf '%s\n' '{"type":"s","data":"Your verification code is 004219. Expires in 10 minutes."}'
     elif [[ " $* " == *"/notif.9 "* ]]; then
       printf '%s\n' '{"type":"s","data":"<b>Bold</b> & Co"}'
     else
@@ -246,6 +248,10 @@ cat >"$temp_dir/dbus-monitor" <<'EOF'
 if [[ -n ${OMALINK_TEST_MONITOR_HOLD:-} ]]; then
   printf '%s\n' "$$" >"$OMALINK_TEST_MONITOR_HOLD"
   exec sleep 300
+fi
+if [[ -n ${OMALINK_TEST_MESSAGE_EVENT:-} ]]; then
+  printf 'signal time=0.9 sender=:1.5 -> destination=(null destination) serial=8 path=/modules/kdeconnect/devices/abc123; interface=org.kde.kdeconnect.device.conversations; member=conversationLoaded\n'
+  printf '   int64 7\n   uint64 2\n'
 fi
 printf 'signal time=1.0 sender=:1.5 -> destination=(null destination) serial=9 path=/modules/kdeconnect/devices/abc123/notifications; interface=org.kde.kdeconnect.device.notifications; member=notificationPosted\n'
 printf '   string "notif.9"\n'
@@ -774,7 +780,7 @@ if XDG_STATE_HOME="$temp_dir/state" PATH="$temp_dir:/usr/bin" "$project_dir/bin/
 fi
 
 # The watcher uses private runtime state, never edits KDE Connect config, and
-# never displays phone titles/bodies (including authenticator codes).
+# keeps ordinary phone titles and bodies out of generic popups.
 watch_out="$(XDG_RUNTIME_DIR="$temp_dir" XDG_CONFIG_HOME="$temp_dir/xdg" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" watch)"
 [[ $watch_out == $'posted abc123 notif.9\nposted abc123 notif.10\nposted abc123 notif.11' ]]
 [[ ! -e "$temp_dir/xdg/kdeconnect.notifyrc" ]]
@@ -814,10 +820,43 @@ grep -q 'Authenticator Open OmaLink to read it' "$temp_dir/notify-send.log"
 if grep -q 'Phone text\|<img' "$temp_dir/notify-send.log"; then
   echo "phone content reached a sender popup" >&2; exit 1
 fi
+# A confident code goes through the private watcher pipe for Omalink's own
+# toast. The generic popup must not duplicate it or put the code in argv.
+: >"$temp_dir/notify-send.log"
+code_out="$(OMALINK_TEST_MFA=1 XDG_RUNTIME_DIR="$temp_dir" XDG_CONFIG_HOME="$temp_dir/xdg" \
+  PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --popups sender watch)"
+grep -qx 'mfa 004219' <<<"$code_out"
+[[ "$(grep -c '^notify ' "$temp_dir/notify-send.log")" == 1 ]]
+if grep -q '004219\|verification code' "$temp_dir/notify-send.log"; then
+  echo "MFA code reached the generic popup" >&2; exit 1
+fi
+: >"$temp_dir/notify-send.log"
+muted_code_out="$(OMALINK_TEST_MFA=1 XDG_RUNTIME_DIR="$temp_dir" XDG_CONFIG_HOME="$temp_dir/xdg" \
+  PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" \
+  --notify-rules '{"abc123":{"pkg:com.azure.authenticator":"mute"}}' watch)"
+if grep -q '^mfa ' <<<"$muted_code_out"; then
+  echo "muted code reached the popup" >&2; exit 1
+fi
+: >"$temp_dir/notify-send.log"
+quiet_code_out="$(OMALINK_TEST_MFA=1 XDG_RUNTIME_DIR="$temp_dir" XDG_CONFIG_HOME="$temp_dir/xdg" \
+  PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --popups off watch)"
+if grep -q '^mfa ' <<<"$quiet_code_out" || [[ -s "$temp_dir/notify-send.log" ]]; then
+  echo "popup-off code reached the popup" >&2; exit 1
+fi
 : >"$temp_dir/notify-send.log"
 if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --popups names status >/dev/null 2>&1; then
   echo "an unknown popup mode was accepted" >&2; exit 1
 fi
+# Message changes carry only device identity, and cannot create popups.
+: >"$temp_dir/notify-send.log"
+message_events="$(OMALINK_TEST_MESSAGE_EVENT=1 XDG_RUNTIME_DIR="$temp_dir" PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --popups off watch-messages)"
+[[ $message_events == 'changed abc123' ]]
+[[ ! -s "$temp_dir/notify-send.log" ]]
+PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" dismiss abc123 notif.1 notif.2 >/dev/null
+if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" dismiss abc123 notif.1 '../bad' >/dev/null 2>&1; then
+  echo 'Invalid notification batch was accepted' >&2; exit 1
+fi
+
 # A watcher stopped with SIGKILL, as the shell stops it, takes its monitor
 # with it, and the next watcher removes the work directory it left.
 kill_runtime="$temp_dir/kill-runtime"

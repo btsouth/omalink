@@ -6,6 +6,8 @@ ShellRoot {
   id: test
   property int step: 0
   property int events: 0
+  property int messageEvents: 0
+  property var codes: []
   property int statusRuns: 0
   property int baseline: 0
   function check(condition, message) {
@@ -19,6 +21,8 @@ ShellRoot {
     id: phone
     settings: ({refreshIntervalSec: 300})
     onPhoneEvent: test.events++
+    onMessageEvent: function(deviceId) { if (deviceId === "abc123") test.messageEvents++ }
+    onMfaCodeReceived: function(code) { test.codes.push(code) }
     onRefreshingChanged: if (refreshing) test.statusRuns++
   }
   Plugin.Service { id: hidden; settings: ({refreshIntervalSec: 300, panelContent: "Hide"}) }
@@ -44,6 +48,8 @@ ShellRoot {
         test.check(!phone.refreshing && !phone.refreshQueued, "a queued refresh was left behind")
       } else if (test.step === 3) {
         test.check(test.events === 1, "the watcher's notification was not signalled: " + test.events)
+        test.check(test.messageEvents === 1, "message changes were not signalled")
+        test.check(test.codes.length === 1 && test.codes[0] === "004219", "MFA code was not delivered privately")
         console.log("omalink refresh runtime tests passed")
         Qt.quit()
       }

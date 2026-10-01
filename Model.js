@@ -489,6 +489,38 @@ function notificationDisplayText(notification) {
   return String(notification.text || "")
 }
 
+// SMS history and Android notifications are two views of the same inbox.
+// Keep unknown/ambiguous senders visible; never combine another chat transport.
+function smsNotification(notification) {
+  return notification && ["com.google.android.apps.messaging", "com.samsung.android.messaging",
+    "com.android.messaging", "com.android.mms"].indexOf(notification.packageName) !== -1
+}
+
+function messageInbox(unread, notifications) {
+  var messages = (unread || []).map(function(row) {
+    return Object.assign({}, row, {notificationIds: []})
+  })
+  var other = []
+  ;(notifications || []).forEach(function(notification) {
+    if (!smsNotification(notification)) { other.push(notification); return }
+    var needle = String(notification.title || "").trim().toLowerCase()
+    var matches = messages.filter(function(row) {
+      return !row.notificationOnly && needle !== ""
+        && (row.names || []).concat(row.addresses || []).some(function(value) {
+          return String(value).trim().toLowerCase() === needle
+        })
+    })
+    if (matches.length === 1) {
+      matches[0].notificationIds.push(notification.id)
+    } else {
+      messages.push({threadId: null, names: [notificationDisplayTitle(notification)],
+        preview: notificationDisplayText(notification), timestamp: 0,
+        notificationOnly: true, notificationIds: [notification.id]})
+    }
+  })
+  return {messages: messages, notifications: other}
+}
+
 function unreadConversations(conversations) {
   if (!Array.isArray(conversations)) return []
   return conversations.filter(function(conversation) {
@@ -529,17 +561,12 @@ function findConversationByTitle(conversations, title) {
   if (!Array.isArray(conversations)) return null
   var needle = String(title || "").trim().toLowerCase()
   if (needle === "") return null
-  for (var i = 0; i < conversations.length; i++) {
-    var conversation = conversations[i]
-    if (!conversation) continue
-    var values = []
-    if (conversation.names) values = values.concat(conversation.names)
-    if (conversation.addresses) values = values.concat(conversation.addresses)
-    for (var j = 0; j < values.length; j++) {
-      if (String(values[j]).trim().toLowerCase() === needle) return conversation
-    }
-  }
-  return null
+  var matches = conversations.filter(function(conversation) {
+    return conversation && (conversation.names || []).concat(conversation.addresses || []).some(function(value) {
+      return String(value).trim().toLowerCase() === needle
+    })
+  })
+  return matches.length === 1 ? matches[0] : null
 }
 
 function conversationTitle(conversation) {
@@ -608,6 +635,8 @@ if (typeof module !== "undefined") {
     redactedNotification: redactedNotification,
     notificationDisplayTitle: notificationDisplayTitle,
     notificationDisplayText: notificationDisplayText,
+    smsNotification: smsNotification,
+    messageInbox: messageInbox,
     unreadConversations: unreadConversations,
     parseSeen: parseSeen,
     filterUnseenUnread: filterUnseenUnread,

@@ -68,6 +68,10 @@ Item {
   property string viewerPath: ""
   property string viewerStatus: ""
   property double nowMs: Date.now()
+  property bool followingLatest: true
+  property bool eventReadQueued: false
+  property bool cachedReadIsEvent: false
+  property bool historyEventPending: false
 
   readonly property var filteredConversations: Model.filterConversations(conversations, searchText)
   readonly property var filteredContacts: Model.filterContacts(contacts, recipientQuery).slice(0, 8)
@@ -77,6 +81,24 @@ Item {
   readonly property color foreground: Color.foreground
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property string fontFamily: Style.font.family
+
+  function dayLabel(timestamp) {
+    var date = new Date(Number(timestamp))
+    var today = new Date(nowMs)
+    if (date.toDateString() === today.toDateString()) return qsTr("Today")
+    today.setDate(today.getDate() - 1)
+    if (date.toDateString() === today.toDateString()) return qsTr("Yesterday")
+    return Qt.formatDate(date, "ddd, MMM d, yyyy")
+  }
+
+  function displayMessages(rows) {
+    var previousY = messageList.contentY
+    messages = rows
+    if (!followingLatest) Qt.callLater(function() {
+      if (root.opened && !root.followingLatest)
+        messageList.contentY = Math.max(0, Math.min(previousY, messageList.contentHeight - messageList.height))
+    })
+  }
 
   function open(payloadJson) {
     if (typeof payloadJson !== "string" || payloadJson.length > 65536) return false
@@ -106,6 +128,9 @@ Item {
 
   function close() {
     opened = false
+    eventReadQueued = false
+    historyEventPending = false
+    messageEvents.stop()
     generation++
     ferryThreads.cancel()
     ferryMessages.cancel()
@@ -180,11 +205,58 @@ Item {
 
   // Shows KDE Connect's cached thread list right away. The full read, which
   // asks the phone for anything newer, replaces it when it finishes.
-  function refreshCachedConversations() {
+  function refreshCachedConversations(eventRead) {
     if (!opened || deviceId === "" || readOnlyProvider || cachedConversationProcess.running || providerInvalidated) return
+    cachedReadIsEvent = eventRead === true
     cachedConversationProcess.command = [helperPath, "conversations-cached", deviceId]
     cachedConversationProcess.generation = generation
     cachedConversationProcess.running = true
+  }
+
+  function applyMessageEvent(text) {
+    var fetched = Model.parseConversations(text)
+    if (fetched.length === 0) return
+    historyConversations = fetched
+    updateSendOperations(SendState.bindThreads(sendOperations, fetched))
+    if (!selectedConversation || composing) return
+    if (threadProcess.running) { historyEventPending = true; return }
+    var latest = Model.findConversationByThreadId(fetched, selectedConversation.threadId)
+    if (!latest) return
+    var history = messageCache[threadCacheKey(latest.threadId)] || []
+    var known = history.some(function(row) {
+      return Number(row.timestamp) === Number(latest.timestamp)
+        && String(row.body || "") === String(latest.preview || "")
+        && row.incoming === latest.incoming
+    })
+    if (!known) openThread(latest)
+  }
+
+  Process {
+    id: messageWatch
+    command: [root.helperPath, "--popups", "off", "watch-messages"]
+    running: root.opened && !root.readOnlyProvider
+    stdout: SplitParser {
+      onRead: function(line) {
+        if (String(line).trim() === "changed " + root.deviceId && !messageEvents.running) messageEvents.start()
+      }
+    }
+    onExited: if (root.opened && !root.readOnlyProvider) messageWatchRestart.restart()
+  }
+
+  Timer {
+    id: messageWatchRestart
+    interval: 5000
+    onTriggered: if (root.opened && !root.readOnlyProvider) messageWatch.running = true
+  }
+
+  Timer {
+    id: messageEvents
+    interval: 120
+    onTriggered: {
+      if (!root.opened) return
+      if (cachedConversationProcess.running) root.eventReadQueued = true
+      else root.refreshCachedConversations(true)
+    }
   }
 
   // The cached list can lack a thread that only just arrived, so a thread
@@ -235,15 +307,13 @@ Item {
       ferryMessages.start(request)
       return
     }
-    if (conversation.unread && conversation.threadId !== null && conversation.threadId !== undefined)
-      Quickshell.execDetached([helperPath, "mark-seen", deviceId,
-        String(conversation.threadId), String(Math.round(Number(conversation.timestamp) || 0))])
     var threadId = String(conversation.threadId)
     var changingThread = !selectedConversation
       || String(selectedConversation.threadId) !== threadId
       || String(selectedConversation.localOperationId || "") !== String(conversation.localOperationId || "")
     selectedConversation = conversation
-    if (changingThread) messages = SendState.messages(messageCache[threadCacheKey(conversation.threadId)] || [], conversation, sendOperations)
+    if (changingThread) followingLatest = true
+    if (changingThread) displayMessages(SendState.messages(messageCache[threadCacheKey(conversation.threadId)] || [], conversation, sendOperations))
     if (conversation.threadId === null || conversation.threadId === undefined) {
       loading = false
       return
@@ -266,7 +336,7 @@ Item {
     var key = threadCacheKey(threadId)
     if (!key) return
     var history = SendState.historyOnly(nextMessages)
-    messages = SendState.messages(history, selectedConversation, sendOperations)
+    displayMessages(SendState.messages(history, selectedConversation, sendOperations))
     var order = cacheOrder.filter(function(item) { return item !== key }).concat([key]).slice(-5)
     var updatedCache = {}
     for (var i = 0; i < order.length; i++) {
@@ -316,7 +386,7 @@ Item {
       if (bound && bound.threadId !== "") selectedConversation = bound.conversation
     }
     if (selectedConversation)
-      messages = SendState.messages(messageCache[threadCacheKey(selectedConversation.threadId)] || [], selectedConversation, sendOperations)
+      displayMessages(SendState.messages(messageCache[threadCacheKey(selectedConversation.threadId)] || [], selectedConversation, sendOperations))
   }
 
   function replaceSend(operation) {
@@ -354,7 +424,14 @@ Item {
     if (outcome.state === "not-submitted") finished.state = "failed"
     replaceSend(finished)
     if (outcome.state !== "accepted") error = outcome.text
-    if (exitCode === 0) reconcileSends.start()
+    if (exitCode === 0) {
+      if (finished.threadId !== "") {
+        var history = messageCache[threadCacheKey(finished.threadId)]
+        if (history) updateSendOperations(SendState.reconcile(sendOperations, deviceId, finished.threadId, history))
+      }
+      reconcileSends.start()
+      Qt.callLater(root.reconcileNextSend)
+    }
   }
 
   function reconcileNextSend() {
@@ -623,11 +700,19 @@ Item {
     stdout: SplitParser {
       onRead: function(text) {
         // Never replace a list the full read already delivered.
-        if (!cachedConversationProcess.current || root.conversationsAppliedGeneration === root.generation) return
+        if (!cachedConversationProcess.current) return
+        if (root.cachedReadIsEvent) { root.applyMessageEvent(text); return }
+        if (root.conversationsAppliedGeneration === root.generation) return
         var fetched = Model.parseConversations(text)
         if (fetched.length === 0) return
         root.applyConversationList(text, false)
         if (!root.selectedConversation) root.loading = false
+      }
+    }
+    onExited: {
+      if (root.eventReadQueued && root.opened) {
+        root.eventReadQueued = false
+        messageEvents.restart()
       }
     }
   }
@@ -675,18 +760,15 @@ Item {
     property string operationId: ""
     property string threadId: ""
     property var result: null
-    readonly property bool current: root.opened && generation === root.generation
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        if (!sendSyncProcess.current) return
-        try {
-          var parsed = JSON.parse(String(text))
-          if (Array.isArray(parsed)) sendSyncProcess.result = parsed
-        } catch (parseError) { /* A failed read is not empty phone history. */ }
-      }
-    }
-    onExited: function(exitCode) {
+    property bool outputFinished: false
+    property bool didExit: false
+    property int resultExitCode: -1
+    onRunningChanged: if (running) { result = null; outputFinished = false; didExit = false }
+    function applyResult() {
+      if (!outputFinished || !didExit) return
+      outputFinished = false
+      var exitCode = resultExitCode
+
       if (!current) return
       if (exitCode === 0 && result !== null) {
         if (threadId === "") {
@@ -707,6 +789,24 @@ Item {
         expired.state = "unconfirmed"
         return expired
       }))
+    }
+    readonly property bool current: root.opened && generation === root.generation
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        if (!sendSyncProcess.current) return
+        try {
+          var parsed = JSON.parse(String(text))
+          if (Array.isArray(parsed)) sendSyncProcess.result = parsed
+        } catch (parseError) { /* A failed read is not empty phone history. */ }
+        sendSyncProcess.outputFinished = true
+        sendSyncProcess.applyResult()
+      }
+    }
+    onExited: function(exitCode) {
+      resultExitCode = exitCode
+      didExit = true
+      applyResult()
     }
   }
 
@@ -800,18 +900,15 @@ Item {
     id: threadProcess
     property int generation: -1
     property var result: null
-    readonly property bool current: root.opened && generation === root.generation
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        if (!threadProcess.current) return
-        try {
-          var parsed = JSON.parse(String(text))
-          if (Array.isArray(parsed)) threadProcess.result = parsed
-        } catch (parseError) { /* Reject malformed or incomplete history. */ }
-      }
-    }
-    onExited: function(exitCode) {
+    property bool outputFinished: false
+    property bool didExit: false
+    property int resultExitCode: -1
+    onRunningChanged: if (running) { result = null; outputFinished = false; didExit = false }
+    function applyResult() {
+      if (!outputFinished || !didExit) return
+      outputFinished = false
+      var exitCode = resultExitCode
+
       if (!current) { result = null; return }
       root.loading = false
       if (exitCode !== 0 || result === null) {
@@ -821,8 +918,35 @@ Item {
                  && (result.length > 0 || root.messages.length === 0)) {
         root.observeHistory(root.loadingThreadId, result)
         root.setThreadMessages(root.loadingThreadId, result)
+        // Opening a row is navigation. Only mark it seen after its history
+        // loaded successfully, and never dismiss the phone notification here.
+        if (result.length > 0 && root.selectedConversation.unread)
+          Quickshell.execDetached([root.helperPath, "mark-seen", root.deviceId,
+            root.loadingThreadId, String(Math.round(Number(root.selectedConversation.timestamp) || 0))])
       }
       result = null
+      if (root.historyEventPending) {
+        root.historyEventPending = false
+        messageEvents.start()
+      }
+    }
+    readonly property bool current: root.opened && generation === root.generation
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        if (!threadProcess.current) return
+        try {
+          var parsed = JSON.parse(String(text))
+          if (Array.isArray(parsed)) threadProcess.result = parsed
+        } catch (parseError) { /* Reject malformed or incomplete history. */ }
+        threadProcess.outputFinished = true
+        threadProcess.applyResult()
+      }
+    }
+    onExited: function(exitCode) {
+      resultExitCode = exitCode
+      didExit = true
+      applyResult()
     }
   }
 
@@ -877,8 +1001,8 @@ Item {
 
       Rectangle {
         anchors.centerIn: parent
-        width: Math.min(Style.space(520), parent.width - Style.space(48))
-        height: Math.min(Style.space(680), parent.height - Style.space(48))
+        width: Math.min(Style.space(620), parent.width - Style.space(48))
+        height: Math.min(Style.space(740), parent.height - Style.space(48))
         color: Color.popups.background
         radius: Style.cornerRadius
 
@@ -973,7 +1097,7 @@ Item {
           }
 
           RowLayout {
-            visible: root.latestSend !== null
+            visible: root.latestSend !== null && root.selectedConversation === null
             Layout.fillWidth: true
             Text {
               Layout.fillWidth: true
@@ -1180,21 +1304,48 @@ Item {
 
           ListView {
             id: messageList
+            objectName: "messageHistoryList"
             visible: root.selectedConversation !== null
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
             spacing: Style.space(8)
             model: root.messages
-            onCountChanged: positionViewAtEnd()
+            boundsBehavior: Flickable.StopAtBounds
+            Controls.ScrollBar.vertical: Controls.ScrollBar { policy: Controls.ScrollBar.AsNeeded }
+            onMovementEnded: root.followingLatest = contentY + height >= contentHeight - Style.space(24)
+            onCountChanged: if (root.followingLatest) Qt.callLater(function() {
+              if (root.opened && root.followingLatest) messageList.positionViewAtEnd()
+            })
 
             delegate: Item {
               required property var modelData
+              required property int index
+              property bool showSendDetails: false
+              readonly property bool beginsDay: index === 0 || !root.messages[index - 1] || new Date(Number(root.messages[index - 1].timestamp)).toDateString()
+                !== new Date(Number(modelData.timestamp)).toDateString()
               width: ListView.view.width
-              height: bubble.implicitHeight
+              height: dayHeader.height + (beginsDay ? Style.space(8) : 0)
+                + bubble.implicitHeight + messageMeta.implicitHeight + Style.space(6)
+                + (showSendDetails ? sendDetails.implicitHeight + Style.space(8) : 0)
+
+              Text {
+                id: dayHeader
+                visible: beginsDay
+                width: parent.width
+                height: visible ? implicitHeight + Style.space(8) : 0
+                horizontalAlignment: Text.AlignHCenter
+                text: root.dayLabel(modelData.timestamp)
+                textFormat: Text.PlainText
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
 
               Rectangle {
                 id: bubble
+                anchors.top: dayHeader.bottom
+                anchors.topMargin: beginsDay ? Style.space(8) : 0
                 readonly property var attachments: Model.messageAttachments(modelData)
                 readonly property bool incomingMessage: modelData.incoming
                 readonly property color contentColor: incomingMessage ? root.foreground : Color.menu.selectedText
@@ -1209,8 +1360,8 @@ Item {
                 color: modelData.incoming
                   ? Style.selectedFillFor(root.foreground, Color.accent)
                   : Color.menu.selectedBackground
-                radius: Style.cornerRadius
-                border.width: modelData.incoming ? 0 : 1
+                radius: Math.max(Style.cornerRadius, Style.space(10))
+                border.width: 0
                 border.color: Color.menu.selectedText
 
                 MouseArea {
@@ -1368,21 +1519,71 @@ Item {
                     wrapMode: TextEdit.Wrap
                   }
 
-                  Text {
-                    Layout.alignment: Qt.AlignRight
-                    text: modelData.sendState
-                      ? SendState.label(modelData.sendState)
-                      : Model.relativeTime(modelData.timestamp, root.nowMs)
-                    Layout.maximumWidth: bubble.width - Style.space(24)
-                    wrapMode: Text.Wrap
-                    textFormat: Text.PlainText
-                    color: modelData.incoming ? root.dim : Color.menu.selectedText
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                  }
                 }
               }
+
+              RowLayout {
+                id: messageMeta
+                anchors.top: bubble.bottom
+                anchors.topMargin: Style.space(4)
+                anchors.left: modelData.incoming ? parent.left : undefined
+                anchors.right: modelData.incoming ? undefined : parent.right
+                spacing: Style.space(6)
+                Text {
+                  text: Qt.formatTime(new Date(modelData.timestamp), "hh:mm")
+                  textFormat: Text.PlainText
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+                Button {
+                  visible: !!modelData.sendState
+                  text: SendState.label(modelData.sendState) + " ⓘ"
+                  tooltipText: SendState.detail(modelData.sendState)
+                  focusable: true
+                  fontSize: Style.font.caption
+                  horizontalPadding: Style.space(2)
+                  verticalPadding: 0
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  onClicked: showSendDetails = !showSendDetails
+                }
+                Button {
+                  visible: !!modelData.localSend && (modelData.sendState === "failed" || modelData.sendState === "unconfirmed")
+                  text: qsTr("Edit copy")
+                  focusable: true
+                  fontSize: Style.font.caption
+                  verticalPadding: 0
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  enabled: !root.sending && !threadProcess.running
+                  onClicked: root.editSend(root.sendOperations.find(function(item) { return item.id === modelData.operationId }))
+                }
+              }
+              Text {
+                id: sendDetails
+                visible: showSendDetails
+                anchors.top: messageMeta.bottom
+                anchors.topMargin: Style.space(8)
+                anchors.right: parent.right
+                width: parent.width * 0.78
+                text: SendState.detail(modelData.sendState)
+                textFormat: Text.PlainText
+                wrapMode: Text.Wrap
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
             }
+          }
+          Button {
+            visible: root.selectedConversation !== null && !root.followingLatest
+            Layout.alignment: Qt.AlignHCenter
+            text: qsTr("Latest messages ↓")
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            focusable: true
+            onClicked: { root.followingLatest = true; messageList.positionViewAtEnd() }
           }
 
           ColumnLayout {
@@ -1529,14 +1730,38 @@ Item {
             Layout.fillWidth: true
             spacing: Style.space(8)
 
-            TextField {
-              id: replyField
+            Controls.ScrollView {
               Layout.fillWidth: true
-              enabled: !root.sending
-              placeholderText: root.sending ? "Sending…" : "Reply"
-              foreground: root.foreground
-              font.family: root.fontFamily
-              onAccepted: root.sendReply()
+              Layout.preferredHeight: Math.min(Style.space(130), Math.max(Style.space(44), replyField.implicitHeight))
+              contentWidth: availableWidth
+              Controls.TextArea {
+                id: replyField
+                enabled: !root.sending
+                placeholderText: qsTr("Message")
+                textFormat: TextEdit.PlainText
+                color: root.foreground
+                placeholderTextColor: root.dim
+                selectionColor: Color.menu.selectedBackground
+                selectedTextColor: Color.menu.selectedText
+                wrapMode: TextEdit.Wrap
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                padding: Style.space(12)
+                background: Rectangle {
+                  color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.07)
+                  radius: Math.max(Style.cornerRadius, Style.space(10))
+                  border.width: replyField.activeFocus ? 1 : 0
+                  border.color: Color.accent
+                }
+                Keys.onReturnPressed: function(event) {
+                  if (!(event.modifiers & Qt.ShiftModifier)) { root.sendReply(); event.accepted = true }
+                  else event.accepted = false
+                }
+                Keys.onEnterPressed: function(event) {
+                  if (!(event.modifiers & Qt.ShiftModifier)) { root.sendReply(); event.accepted = true }
+                  else event.accepted = false
+                }
+              }
             }
 
             Button {
@@ -1555,7 +1780,7 @@ Item {
             text: root.readOnlyProvider
               ? (root.browsingContacts ? qsTr("Showing up to 200 cached contact addresses. Filtering searches this loaded subset.") : qsTr("Bounded local history · R to refresh · Esc to go back"))
               : root.selectedConversation
-              ? "Enter to send · Right-click a message to copy it · R to refresh · Esc to go back"
+              ? "Enter to send · Shift+Enter for a new line"
               : root.composing
                 ? "Choose a synced contact or enter a phone number · Esc to cancel"
                 : root.filteredConversations.length + " of " + root.conversations.length

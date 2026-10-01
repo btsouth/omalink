@@ -16,7 +16,15 @@ import sys
 import time
 
 root = pathlib.Path(__file__).resolve().parent
-command, device, *args = sys.argv[1:]
+arguments = sys.argv[1:]
+while arguments and arguments[0].startswith("--"):
+    arguments = arguments[2:]
+if arguments == ["watch-messages"]:
+    with (root / "calls.jsonl").open("a") as stream:
+        stream.write(json.dumps(["watch-messages", ""]) + "\n")
+    time.sleep(30)
+    sys.exit(0)
+command, device, *args = arguments
 with (root / "calls.jsonl").open("a") as stream:
     stream.write(json.dumps([command, device]) + "\n")
 if command == "contacts":
@@ -47,6 +55,7 @@ import pathlib
 import sys
 calls = collections.Counter(tuple(json.loads(line)) for line in pathlib.Path(sys.argv[1]).read_text().splitlines())
 assert calls == {("contacts","old"):2,("conversations","old"):2,("conversations-cached","old"):2,("messages","old"):2,
-                 ("contacts","new"):1,("conversations","new"):1,("conversations-cached","new"):1,("messages","new"):1}, calls
+                 ("contacts","new"):1,("conversations","new"):1,("conversations-cached","new"):1,("messages","new"):1,
+                 ("watch-messages",""):3}, calls
 print("provider routing invocation checks passed")
 PY

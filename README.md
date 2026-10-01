@@ -14,10 +14,14 @@ from an already-running BlueFerry backend.
 - SMS/MMS/RCS and authenticator notifications with dismissal on the phone
 - Notification sources you can tune, and popups you can turn off while keeping
   the list in the panel
-- Notification popups that open the OmaLink panel on click. Texts and chats
+- Ordinary notification popups that open the OmaLink panel on click. Texts and chats
   name the sender ("New message from Rebecca"); message contents are never
-  shown in popups (read them in the panel instead)
-- Unread text messages readable directly in the panel, even when the phone
+  shown in ordinary popups (read them in the panel instead)
+- New notification messages with one clear authentication code show only that
+  code in a short-lived popup with a Copy code button. Copy marks the clipboard
+  sensitive so Omarchy clipboard history skips it. Notification popups set to
+  Off suppress these popups too
+- One Messages inbox combines unread texts and their SMS notifications, even when the phone
   redacts notification contents; click one to open its conversation
 - Clear unread messages from the panel (KDE Connect cannot mark conversations
   read on the phone, so clearing is local: a cleared thread returns only when
@@ -56,6 +60,7 @@ experimental and has not passed physical iPhone acceptance. See the
 - Omarchy 4.0 or newer
 - An Android phone with [KDE Connect](https://kdeconnect.kde.org/) installed
 - `kdeconnect`, `jq`, and `python-dbus` on the Omarchy computer
+- `wl-clipboard` for copying authentication codes
 - The standard Omarchy tools from `bash`, `coreutils`, `util-linux`, `systemd`,
   `dbus`, `libnotify`, `xdg-utils`, `findutils`, `gawk`, `grep`, and `sed`
 
@@ -183,14 +188,29 @@ support, but OmaLink has not implemented or validated that workflow.
 Message history is requested from the phone when needed. OmaLink does not add
 its own cloud service or persistent message database.
 
-Sends distinguish **Submitting**, **Accepted by KDE Connect**, **Unconfirmed**
-and **Not submitted**. A successful helper call means acceptance, not delivery.
+Send status appears below each outgoing bubble: **Sending**, **Waiting for phone**,
+**In phone history**, **Check phone** or **Not sent**. Click the status for details.
+The reply composer supports multiple lines: Enter sends and Shift+Enter adds a
+line. Date separators keep older messages distinct. Incoming message events
+update open conversations, with polling retained as a fallback. Reading older
+messages keeps your scroll position; **Latest messages** returns to the bottom.
+
+SMS notifications and unread SMS history share one Messages section. A unique
+exact sender match combines them; an ambiguous sender stays visible separately.
+A notification can appear before its SMS history is available. Other app
+notifications keep their own section. Clearing an inbox row clears OmaLink's
+local unread state and requests dismissal of associated phone notifications.
+
+A request distinguishes submission, backend acceptance, history observation,
+and an unknown outcome. A successful helper call means acceptance, not delivery.
 OmaLink makes at most six additional history reads over a 30-second observation
 window. If confirmation remains unavailable, check your phone before using
 **Edit copy** to prepare another send. OmaLink never retries automatically.
 
 A matching outgoing history record is labeled separately from delivery. The
 match uses exact text, time and a previously loaded conversation snapshot;
+whole-second phone timestamps allow only the same desktop send second, and
+previously observed matching records remain excluded.
 KDE Connect does not expose a corresponding send ID here. Simultaneous identical
 messages sent on the phone remain ambiguous, and new or unviewed conversations
 without a prior snapshot stay unconfirmed. Up to 100 local send records remain
@@ -335,6 +355,7 @@ node tests/file-share-model.test.js
 node tests/private-text.test.js
 node tests/blueferry-model.test.js
 bash tests/qml.test.sh
+python3 tests/mfa.test.py
 shellcheck -S warning bin/omalink bin/omalink-files tests/*.sh
 omabox run -- omarchy plugin validate .
 omabox run -- bash tests/cli.test.sh
@@ -344,6 +365,10 @@ omabox run --net isolated -- /usr/bin/python3 tests/text-transport.test.py
 omabox run -- bash tests/files.test.sh
 omabox run -- bash tests/runtime.test.sh
 omabox run -- bash tests/selection-runtime.test.sh
+omabox run -- bash tests/refresh-runtime.test.sh
+omabox run -- bash tests/message-events-runtime.test.sh
+omabox run -- bash tests/messaging-navigation.test.sh
+omabox run -- bash tests/mfa-runtime.test.sh
 omabox run -- bash tests/send-runtime.test.sh
 omabox run -- bash tests/provider-runtime.test.sh
 omabox run -- bash tests/provider-request-runtime.test.sh

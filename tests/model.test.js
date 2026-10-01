@@ -221,3 +221,20 @@ assert.strictEqual(directSms[0].threadId, null)
 assert.strictEqual(directSms[1].threadId, 99)
 
 console.log("model tests passed")
+
+const sms = {id:"sms1",packageName:"com.google.android.apps.messaging",title:"Becca",text:"new"}
+const chat = {...sms,id:"chat1",packageName:"com.whatsapp"}
+const becca = {threadId:7,names:["Becca"],addresses:["+15550000001"],preview:"new",unread:true,timestamp:1000}
+let inbox = model.messageInbox([becca],[sms,chat])
+assert.equal(inbox.messages.length,1)
+assert.deepEqual(inbox.messages[0].notificationIds,["sms1"])
+assert.deepEqual(inbox.notifications,[chat])
+assert.equal(becca.notificationIds,undefined,"inbox must not mutate history")
+inbox = model.messageInbox([],[sms])
+assert.equal(inbox.messages[0].notificationOnly,true,"notification appears before SMS history")
+assert.equal(inbox.messages[0].preview,"new")
+assert.equal(model.messageInbox([becca,{...becca,threadId:8}],[sms]).messages.length,3,"ambiguous names stay visible")
+assert.equal(model.messageInbox([becca],[{...sms,packageName:""}]).notifications.length,1,"unknown transport stays visible")
+
+assert.equal(model.findConversationByTitle([becca,{...becca,threadId:8}], "Becca"), null,
+  "an ambiguous notification must not open the first matching recipient")

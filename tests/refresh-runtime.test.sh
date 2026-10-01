@@ -19,6 +19,8 @@ case $1 in
   watch)
     sleep 0.2
     echo "posted abc123 notif.1"
+    echo "changed abc123"
+    echo "mfa 004219"
     sleep 30
     ;;
   *) : ;;

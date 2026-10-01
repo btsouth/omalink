@@ -25,12 +25,16 @@ Panel {
   readonly property color iconColor: phone.connected ? foreground : dim
   readonly property bool notificationsReady: phone.canUseCapability(activePhoneId, "notifications") && !!phone.selectedDevice
   readonly property var activePhoneRules: phone.notifyRulesFor(activePhoneId)
-  readonly property var notifications: notificationsReady && Array.isArray(phone.selectedDevice.notifications)
+  readonly property var phoneNotifications: notificationsReady && Array.isArray(phone.selectedDevice.notifications)
     ? NotificationPolicy.visibleNotifications(phone.selectedDevice.notifications, phone.notifySources, activePhoneRules) : []
+  readonly property var inbox: messagesReady ? Model.messageInbox(unreadConversations, phoneNotifications)
+    : {messages: unreadConversations, notifications: phoneNotifications}
+  readonly property var messageEntries: inbox.messages
+  readonly property var notifications: inbox.notifications
   readonly property var notificationSources: notificationsReady
     ? NotificationPolicy.normalizeSources(phone.selectedDevice.notificationSources) : null
   readonly property var notificationAppRows: notificationsReady ? NotificationPolicy.appRows(notificationSources, activePhoneRules) : []
-  readonly property var notificationSummary: NotificationPolicy.summaryLines(notificationSources, notifications.length,
+  readonly property var notificationSummary: NotificationPolicy.summaryLines(notificationSources, phoneNotifications.length,
     !panelContentHidden && notifications.length > 0)
   readonly property bool notificationSectionVisible: notifications.length > 0 || notificationAppRows.length > 0
     || (notificationSources !== null && notificationSources.examined > 0)
@@ -241,6 +245,9 @@ Panel {
 
   Connections {
     target: phone
+    function onMessageEvent(deviceId) {
+      if (deviceId === root.activePhoneId) root.refreshUnreadCached()
+    }
     function onPhoneEvent() {
       root.refreshUnreadCached()
       // A text's notification can arrive just before the message itself.
@@ -283,13 +290,30 @@ Panel {
     Quickshell.execDetached(args)
   }
 
+  function clearMessageEntries(entries) {
+    markSeenEntries(entries)
+    var ids = []
+    entries.forEach(function(entry) { ids = ids.concat(entry.notificationIds || []) })
+    phone.dismissNotifications(root.activePhoneId, ids)
+  }
+
   function openMessages(payload) {
-    if (!messagesReady || !phone.selectedEndpoint) return
+    if (!messagesReady || !phone.selectedEndpoint) return false
     payload.endpoint = phone.selectedEndpoint
     payload.deviceId = activePhoneId
     payload.deviceName = phone.selectedDeviceName
+    if (!bar || !bar.shell || !bar.shell.summon("omalink.phone", JSON.stringify(payload))) {
+      phone.actionStatus = qsTr("Could not open Messages. Please try again.")
+      return false
+    }
     root.close()
-    bar.shell.summon("omalink.phone", JSON.stringify(payload))
+    return true
+  }
+
+  function openMessageEntry(entry) {
+    if (!entry) return false
+    return openMessages(entry.notificationOnly
+      ? {conversationHint: Model.conversationTitle(entry)} : {threadId: entry.threadId})
   }
 
   Process {
@@ -342,6 +366,14 @@ Panel {
     settings: root.settings
     panelOpen: root.opened
     onSelectionSuggested: function(deviceId, deviceName) { root.persistSelection(deviceId, deviceName) }
+    onMfaCodeReceived: function(code) { if (phone.notifyPopups !== "off") mfaPopup.showCode(code) }
+    onNotifyPopupsChanged: if (notifyPopups === "off" && mfaPopup) mfaPopup.clear()
+  }
+
+  MfaPopup {
+    id: mfaPopup
+    barPosition: root.bar ? root.bar.position : "top"
+    barSize: root.bar ? root.bar.barSize : 0
   }
 
   BlueFerryService {
@@ -578,7 +610,7 @@ Panel {
             Button {
               width: actionGrid.cellWidth
               iconText: "󰍩"
-              text: root.unreadConversations.length > 0 ? qsTr("Messages · %1").arg(root.unreadConversations.length) : qsTr("Messages")
+              text: root.messageEntries.length > 0 ? qsTr("Messages · %1").arg(root.messageEntries.length) : qsTr("Messages")
               tooltipText: root.messagesReady ? "" : phone.capabilityText(root.activePhoneId, "messaging")
               enabled: root.messagesReady
               opacity: enabled ? 1.0 : 0.5
@@ -902,7 +934,7 @@ Panel {
         }
 
         ColumnLayout {
-          visible: root.panelContentHidden && (root.unreadConversations.length > 0 || root.notificationSectionVisible)
+          visible: root.panelContentHidden && (root.messageEntries.length > 0 || root.notificationSectionVisible)
           Layout.fillWidth: true
           spacing: Style.space(8)
 
@@ -920,7 +952,7 @@ Panel {
         }
 
         ColumnLayout {
-          visible: root.unreadConversations.length > 0
+          visible: root.messageEntries.length > 0
           Layout.fillWidth: true
           spacing: Style.space(8)
 
@@ -931,13 +963,14 @@ Panel {
 
             PanelSectionHeader {
               Layout.fillWidth: true
-              text: qsTr("UNREAD MESSAGES · %1").arg(root.unreadConversations.length)
+              text: qsTr("MESSAGES · %1").arg(root.messageEntries.length)
               foreground: root.foreground
               fontFamily: root.fontFamily
             }
 
             Button {
               text: qsTr("Clear")
+              enabled: !phone.actionBusy
               visible: !root.panelContentHidden
               focusable: true
               fontSize: Style.font.caption
@@ -945,21 +978,21 @@ Panel {
               foreground: root.foreground
               fontFamily: root.fontFamily
               Accessible.role: Accessible.Button
-              Accessible.name: qsTr("Clear unread messages in OmaLink")
-              onClicked: root.markSeenEntries(root.unreadConversations)
+              Accessible.name: qsTr("Clear messages in OmaLink and dismiss their phone notifications")
+              onClicked: root.clearMessageEntries(root.messageEntries)
             }
           }
 
           ListView {
             objectName: "unreadContentList"
-            visible: !root.panelContentHidden && root.unreadConversations.length > 0
+            visible: !root.panelContentHidden && root.messageEntries.length > 0
             Layout.fillWidth: true
             Layout.preferredHeight: Math.min(contentHeight, Style.space(170))
             clip: true
             spacing: Style.space(2)
             boundsBehavior: Flickable.StopAtBounds
             interactive: contentHeight > height
-            model: root.panelContentHidden ? [] : root.unreadConversations
+            model: root.panelContentHidden ? [] : root.messageEntries
 
             Controls.ScrollBar.vertical: Controls.ScrollBar { policy: Controls.ScrollBar.AsNeeded }
 
@@ -978,8 +1011,7 @@ Panel {
               Keys.onSpacePressed: open()
 
               function open() {
-                root.markSeenEntries([modelData])
-                root.openMessages({ threadId: modelData.threadId })
+                root.openMessageEntry(modelData)
               }
 
               MouseArea {
@@ -1068,7 +1100,8 @@ Panel {
 
             PanelSectionHeader {
               Layout.fillWidth: true
-              text: qsTr("NOTIFICATIONS · %1").arg(root.notifications.length)
+              text: root.notifications.length > 0 ? qsTr("NOTIFICATIONS · %1").arg(root.notifications.length)
+                : qsTr("NOTIFICATION SETTINGS")
               foreground: root.foreground
               fontFamily: root.fontFamily
             }
