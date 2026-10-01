@@ -36,6 +36,14 @@ await_client() {
   return 1
 }
 dispatch() { hyprctl dispatch "$1" >/dev/null; }
+select_thread() {
+  for ((attempt=0; attempt<150; attempt++)); do
+    [[ $(ipc choose "$1") == true ]] && return
+    sleep 0.05
+  done
+  echo "Could not select thread $1" >&2
+  return 1
+}
 await_state '(.opened | not)'
 # Let the preview's initial panel load before explicitly opening Messages.
 for ((attempt=0; attempt<150; attempt++)); do
@@ -100,8 +108,23 @@ done
 [[ $(wc -l < "$work/bin/history-reads") -ge 3 ]]
 await_state ".opened and .generation == $generation and .operations == 1 and .caches == 1 and .draft == \"Keep this draft\\nwhile using another app\""
 
+select_thread 8
+await_state '.threadId == 8 and .draft == "" and .drafts == 1'
+ipc draft 'Draft for Maya'
+select_thread 7
+await_state '.threadId == 7 and .draft == "Keep this draft\nwhile using another app" and .drafts == 2'
+select_thread 8
+await_state '.threadId == 8 and .draft == "Draft for Maya"'
+for thread in 9 10 11 12 13 14; do
+  select_thread "$thread"
+  await_state ".threadId == $thread and .rows == 3"
+  ipc draft "Draft $thread"
+done
+select_thread 15
+await_state '.threadId == 15 and .drafts == 5 and .draft == ""'
+
 dispatch "hl.dsp.window.close({ window = '$selector' })"
-await_state '(.opened | not) and (.visible | not) and .draft == "" and .rows == 0 and .operations == 0 and .caches == 0'
+await_state '(.opened | not) and (.visible | not) and .draft == "" and .rows == 0 and .operations == 0 and .caches == 0 and .drafts == 0'
 await_client '[.[] | select(.title == "OmaLink Messages")] | length == 0'
 ipc thread
 await_state '.opened and .visible and .threadId == 7 and .rows == 3'

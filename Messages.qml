@@ -80,7 +80,57 @@ Item {
   readonly property string pluginDir: Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "").replace(/\/$/, "")
   readonly property string helperPath: pluginDir + "/bin/omalink"
   readonly property color foreground: Color.foreground
-  readonly property color dim: Qt.darker(foreground, 1.55)
+  readonly property color windowBackground: Qt.rgba(Color.background.r, Color.background.g, Color.background.b, 1)
+  readonly property color dim: blend(foreground, windowBackground, 0.72)
+  readonly property color separator: blend(foreground, windowBackground, 0.13)
+  readonly property color sidebarBackground: blend(foreground, windowBackground, 0.035)
+  readonly property color incomingBackground: blend(foreground, windowBackground, 0.07)
+  readonly property color outgoingBackground: blend(Color.accent, windowBackground, 0.15)
+  readonly property string readingFontFamily: "Sans Serif"
+  readonly property int bodySize: Math.max(16, Style.font.body)
+  readonly property int labelSize: Math.max(13, Style.font.caption)
+  readonly property bool compactHeight: messagesWindow.height < Style.space(600)
+  readonly property bool wideLayout: messagesWindow.width >= Style.space(900)
+  property var replyDrafts: ({})
+  property var draftOrder: []
+
+  function blend(front, back, amount) {
+    return Qt.rgba(front.r * amount + back.r * (1 - amount),
+      front.g * amount + back.g * (1 - amount), front.b * amount + back.b * (1 - amount), 1)
+  }
+
+  function initials(conversation) {
+    var title = Model.conversationTitle(conversation || {}).trim()
+    var words = title.split(/\s+/)
+    return (words.length > 1 ? words[0].charAt(0) + words[words.length - 1].charAt(0) : title.slice(0, 2)).toUpperCase()
+  }
+
+  function draftKey(conversation) {
+    if (!conversation) return ""
+    return conversation.threadId === null || conversation.threadId === undefined
+      ? (conversation.localOperationId ? endpointKey + "/draft/" + conversation.localOperationId : "")
+      : threadCacheKey(conversation.threadId)
+  }
+
+  // Navigation retains at most five drafts in this endpoint's memory-only session.
+  function rememberDraft() {
+    if (!selectedConversation) return
+    var key = draftKey(selectedConversation)
+    if (!key) return
+    var order = draftOrder.filter(function(item) { return item !== key }).concat([key]).slice(-5)
+    var next = {}
+    for (var i = 0; i < order.length; i++) next[order[i]] = order[i] === key ? replyText : replyDrafts[order[i]] || ""
+    replyDrafts = next
+    draftOrder = order
+  }
+
+  function selectThread(conversation) {
+    if (sending || threadProcess.running) return
+    composing = false
+    browsingContacts = false
+    closeViewer()
+    openThread(conversation)
+  }
   readonly property string fontFamily: Style.font.family
 
   function dayLabel(timestamp) {
@@ -94,10 +144,37 @@ Item {
 
   function displayMessages(rows) {
     var previousY = messageList.contentY
+    var anchorIndex = messageList.indexAt(1, previousY + 1)
+    var anchorItem = messageList.itemAtIndex(anchorIndex)
+    var anchor = anchorItem && messages[anchorIndex] ? {
+      row: messages[anchorIndex], index: anchorIndex, offset: anchorItem.mapToItem(messageList, 0, 0).y
+    } : null
+    var currentGeneration = generation
+    var currentThread = selectedConversation ? draftKey(selectedConversation) : ""
     messages = rows
     if (!followingLatest) Qt.callLater(function() {
-      if (root.opened && !root.followingLatest)
-        messageList.contentY = Math.max(0, Math.min(previousY, messageList.contentHeight - messageList.height))
+      if (!root.opened || root.followingLatest || root.generation !== currentGeneration
+          || !root.selectedConversation || root.draftKey(root.selectedConversation) !== currentThread) return
+      function sameRow(row) {
+        return row && anchor && row.body === anchor.row.body
+          && Number(row.timestamp) === Number(anchor.row.timestamp) && row.incoming === anchor.row.incoming
+      }
+      var target = anchor ? (sameRow(rows[anchor.index]) ? anchor.index : rows.findIndex(sameRow)) : -1
+      if (target < 0) {
+        messageList.contentY = messageList.originY + Math.max(0, Math.min(
+          previousY - messageList.originY, messageList.contentHeight - messageList.height))
+        return
+      }
+      // Realize the same row before restoring its screen position. ListView's
+      // origin can change when it recycles delegates, even for an append.
+      messageList.positionViewAtIndex(target, ListView.Beginning)
+      messageList.forceLayout()
+      Qt.callLater(function() {
+        if (!root.opened || root.followingLatest || root.generation !== currentGeneration
+            || !root.selectedConversation || root.draftKey(root.selectedConversation) !== currentThread) return
+        var item = messageList.itemAtIndex(target)
+        if (item) messageList.contentY += item.mapToItem(messageList, 0, 0).y - anchor.offset
+      })
     })
   }
 
@@ -171,6 +248,8 @@ Item {
     threadProcess.result = null
     attachmentProcess.running = false
     replyField.text = ""
+    replyDrafts = ({})
+    draftOrder = []
     composeMessage.text = ""
     loading = false
     conversations = []
@@ -336,6 +415,10 @@ Item {
     var changingThread = !selectedConversation
       || String(selectedConversation.threadId) !== threadId
       || String(selectedConversation.localOperationId || "") !== String(conversation.localOperationId || "")
+    if (changingThread) {
+      rememberDraft()
+      replyField.text = replyDrafts[draftKey(conversation)] || ""
+    }
     selectedConversation = conversation
     if (changingThread) followingLatest = true
     if (changingThread) displayMessages(SendState.messages(messageCache[threadCacheKey(conversation.threadId)] || [], conversation, sendOperations))
@@ -373,6 +456,7 @@ Item {
   }
 
   function showConversations() {
+    rememberDraft()
     if (readOnlyProvider) ferryMessages.cancel()
     browsingContacts = false
     searchText = ""
@@ -388,6 +472,7 @@ Item {
 
   function startCompose() {
     if (readOnlyProvider) return
+    rememberDraft()
     selectedConversation = null
     composing = true
     recipientQuery = ""
@@ -980,8 +1065,8 @@ Item {
     objectName: "messagesAppWindow"
     visible: false
     title: "OmaLink Messages"
-    color: Color.popups.background
-    implicitWidth: Style.space(620)
+    color: root.windowBackground
+    implicitWidth: Style.space(1080)
     implicitHeight: Style.space(740)
     minimumSize: Qt.size(Style.space(400), Style.space(420))
     // Only an explicit window close tears down history and local send state.
@@ -998,9 +1083,9 @@ Item {
         else root.close()
       }
       Keys.onPressed: function(event) {
-        if (!root.selectedConversation && !root.composing && (event.key === Qt.Key_Slash
+        if ((!root.selectedConversation || root.wideLayout) && !root.composing && (event.key === Qt.Key_Slash
             || (event.key === Qt.Key_F && (event.modifiers & Qt.ControlModifier)))) {
-          searchField.forceActiveFocus()
+          (root.browsingContacts ? providerFilter : searchField).forceActiveFocus()
           event.accepted = true
         } else if (!root.selectedConversation && !root.composing && event.key === Qt.Key_PageDown) {
           conversationList.contentY = Math.min(
@@ -1024,795 +1109,1030 @@ Item {
 
       Rectangle {
         anchors.fill: parent
-        color: Color.popups.background
+        color: root.windowBackground
 
-        ColumnLayout {
+        RowLayout {
           anchors.fill: parent
-          anchors.margins: Style.space(16)
-          anchors.leftMargin: Math.max(Style.space(16), (parent.width - Style.space(900)) / 2)
-          anchors.rightMargin: anchors.leftMargin
-          spacing: Style.space(12)
-
-          RowLayout {
-            Layout.fillWidth: true
-
-            PanelActionButton {
-              visible: root.selectedConversation !== null || root.composing || root.browsingContacts
-              iconText: "󰁍"
-              tooltipText: "Back to conversations"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              onClicked: root.showConversations()
-            }
-
-            Text {
-              Layout.fillWidth: true
-              text: root.selectedConversation
-                ? Model.conversationTitle(root.selectedConversation)
-                : (root.browsingContacts ? qsTr("Contacts") : root.composing ? "New message" : "Messages")
-              textFormat: Text.PlainText
-              elide: Text.ElideRight
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.display
-              font.bold: true
-            }
-
-            Button {
-              visible: !root.readOnlyProvider && root.selectedConversation === null && !root.composing
-              text: "New message"
-              enabled: !root.readOnlyProvider
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              bordered: true
-              onClicked: root.startCompose()
-            }
-
-            Button {
-              visible: root.readOnlyProvider && !root.browsingContacts && root.selectedConversation === null
-              text: qsTr("Contacts")
-              enabled: !root.providerInvalidated
-              focusable: true
-              onClicked: root.showProviderContacts()
-            }
-
-            PanelActionButton {
-              visible: !root.composing
-              enabled: !root.providerInvalidated
-              iconText: "󰑐"
-              tooltipText: "Refresh"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              onClicked: root.refresh()
-            }
-
-            PanelActionButton {
-              iconText: "󰅖"
-              tooltipText: qsTr("Close. Clears local activity; submitted sends may still finish.")
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              onClicked: root.close()
-            }
-          }
-
-          Text {
-            Layout.fillWidth: true
-            text: root.readOnlyProvider ? qsTr("BlueFerry local history · Experimental") : qsTr("Phone: %1").arg(root.deviceName)
-            textFormat: Text.PlainText
-            elide: Text.ElideRight
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-          }
-
-          Text {
-            visible: root.readOnlyProvider
-            Layout.fillWidth: true
-            text: qsTr("Read-only, limited history observed by BlueFerry. It may be incomplete and is not tied to your selected KDE Connect phone. Viewing does not mark messages read.")
-            textFormat: Text.PlainText
-            wrapMode: Text.Wrap
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-          }
-
-          RowLayout {
-            visible: root.latestSend !== null && root.selectedConversation === null
-            Layout.fillWidth: true
-            Text {
-              Layout.fillWidth: true
-              text: root.latestSend
-                ? (root.latestSend.conversation ? Model.conversationTitle(root.latestSend.conversation) : root.latestSend.number)
-                  + ": " + SendState.label(root.latestSend.state) : ""
-              textFormat: Text.PlainText
-              wrapMode: Text.Wrap
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-            Button {
-              text: "Edit copy"
-              visible: root.latestSend !== null && (root.latestSend.state === "failed" || root.latestSend.state === "unconfirmed")
-              enabled: !root.sending && !threadProcess.running
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              onClicked: root.editSend(root.latestSend)
-            }
-          }
-
-          Text {
-            visible: !root.browsingContacts && (root.error !== "" || (!root.composing && (root.loading || (root.selectedConversation ? root.messages.length === 0 : root.filteredConversations.length === 0))))
-            Layout.fillWidth: true
-            text: root.error !== "" ? root.error : (root.loading ? "Loading…" : (root.selectedConversation ? "No messages" : (root.searchText === "" ? "No conversations" : "No matches")))
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-            horizontalAlignment: Text.AlignHCenter
-          }
-
-          RowLayout {
-            visible: root.selectedConversation === null && !root.composing
-            Layout.fillWidth: true
-            spacing: Style.space(8)
-
-            TextField {
-              id: searchField
-              Layout.fillWidth: true
-              placeholderText: root.browsingContacts ? qsTr("Filter loaded contacts") : "Search conversations"
-              text: root.searchText
-              foreground: root.foreground
-              font.family: root.fontFamily
-              onTextChanged: root.searchText = text
-              Keys.onEscapePressed: {
-                if (text !== "") text = ""
-                else keyCatcher.forceActiveFocus()
-              }
-            }
-
-            PanelActionButton {
-              visible: root.searchText !== ""
-              iconText: "󰅖"
-              tooltipText: "Clear search"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              onClicked: {
-                root.searchText = ""
-                searchField.forceActiveFocus()
-              }
-            }
-          }
-
-          ListView {
-            id: conversationList
-            visible: root.selectedConversation === null && !root.composing && !root.browsingContacts
-            Layout.fillWidth: true
+          spacing: 0
+          Rectangle {
+            Layout.preferredWidth: root.wideLayout ? Style.space(300) : -1
+            Layout.fillWidth: !root.wideLayout
             Layout.fillHeight: true
-            clip: true
-            spacing: Style.space(4)
-            boundsBehavior: Flickable.StopAtBounds
-            interactive: contentHeight > height
-            model: root.filteredConversations
+            visible: root.wideLayout || (!root.selectedConversation && !root.composing && !root.browsingContacts)
+            color: root.sidebarBackground
 
-            Controls.ScrollBar.vertical: Controls.ScrollBar { policy: Controls.ScrollBar.AsNeeded }
-
-            delegate: Rectangle {
-              required property var modelData
-              width: ListView.view.width
-              height: row.implicitHeight + Style.space(18)
-              activeFocusOnTab: true
-              Accessible.role: Accessible.Button
-              Accessible.name: Model.conversationTitle(modelData)
-              Keys.onReturnPressed: root.openThread(modelData)
-              Keys.onSpacePressed: root.openThread(modelData)
-              border.width: activeFocus ? 1 : 0
-              border.color: Color.accent
-              color: rowMouse.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent) : "transparent"
-              radius: Style.cornerRadius
-
-              RowLayout {
-                id: row
-                anchors.fill: parent
-                anchors.margins: Style.space(9)
-                spacing: Style.space(10)
-
-                Rectangle {
-                  width: Style.space(36)
-                  height: width
-                  radius: width / 2
-                  color: Style.selectedFillFor(root.foreground, Color.accent)
-
-                  Text {
-                    anchors.centerIn: parent
-                    text: "󰍩"
-                    color: root.foreground
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.icon
-                  }
-                }
-
-                ColumnLayout {
-                  Layout.fillWidth: true
-                  spacing: Style.space(2)
-
-                  RowLayout {
-                    Layout.fillWidth: true
-                    Text {
-                      Layout.fillWidth: true
-                      text: Model.conversationTitle(modelData)
-                      textFormat: Text.PlainText
-                      color: root.foreground
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.body
-                      font.bold: modelData.unread
-                      elide: Text.ElideRight
-                    }
-                    Text {
-                      text: modelData.sendState === "unconfirmed" ? "Unconfirmed"
-                        : modelData.sendState === "failed" ? "Not submitted"
-                        : modelData.sendState ? "Pending"
-                        : Model.relativeTime(modelData.timestamp, root.nowMs)
-                      textFormat: Text.PlainText
-                      color: root.dim
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
-                    }
-                  }
-
-                  Text {
-                    Layout.fillWidth: true
-                    text: (modelData.incoming ? "" : "You: ") + Model.previewText(modelData)
-                    textFormat: Text.PlainText
-                    color: root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                    elide: Text.ElideRight
-                  }
-                }
-              }
-
-              MouseArea {
-                id: rowMouse
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: {
-                  root.openThread(modelData)
-                }
-              }
-            }
-          }
-
-          Text {
-            visible: root.browsingContacts
-            Layout.fillWidth: true
-            text: root.contactsError !== "" ? root.contactsError : ferryContacts.running ? qsTr("Loading contacts…")
-              : root.visibleProviderContacts.length === 0 ? qsTr("No contacts in this loaded subset") : ""
-            textFormat: Text.PlainText
-            wrapMode: Text.Wrap
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-          }
-
-          ListView {
-            visible: root.browsingContacts
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            clip: true
-            spacing: Style.space(8)
-            model: root.visibleProviderContacts
-            Controls.ScrollBar.vertical: Controls.ScrollBar { policy: Controls.ScrollBar.AsNeeded }
-            delegate: Item {
-              required property var modelData
-              width: ListView.view.width
-              height: contactText.implicitHeight
-              TextEdit {
-                id: contactText
-                width: parent.width
-                text: modelData.name + "\n" + modelData.number
-                textFormat: TextEdit.PlainText
-                readOnly: true
-                selectByMouse: true
-                wrapMode: TextEdit.Wrap
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.body
-                Accessible.name: modelData.name + ", " + modelData.number
-              }
-            }
-          }
-
-          ListView {
-            id: messageList
-            objectName: "messageHistoryList"
-            visible: root.selectedConversation !== null
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            clip: true
-            spacing: Style.space(8)
-            model: root.messages
-            boundsBehavior: Flickable.StopAtBounds
-            Controls.ScrollBar.vertical: Controls.ScrollBar { policy: Controls.ScrollBar.AsNeeded }
-            onMovementEnded: root.followingLatest = contentY + height >= contentHeight - Style.space(24)
-            onCountChanged: if (root.followingLatest) Qt.callLater(function() {
-              if (root.opened && root.followingLatest) messageList.positionViewAtEnd()
-            })
-
-            delegate: Item {
-              required property var modelData
-              required property int index
-              property bool showSendDetails: false
-              readonly property bool beginsDay: index === 0 || !root.messages[index - 1] || new Date(Number(root.messages[index - 1].timestamp)).toDateString()
-                !== new Date(Number(modelData.timestamp)).toDateString()
-              width: ListView.view.width
-              height: dayHeader.height + (beginsDay ? Style.space(8) : 0)
-                + bubble.implicitHeight + messageMeta.implicitHeight + Style.space(6)
-                + (showSendDetails ? sendDetails.implicitHeight + Style.space(8) : 0)
-
+            Rectangle { anchors.right: parent.right; height: parent.height; width: 1; color: root.separator; visible: root.wideLayout }
+            ColumnLayout {
+              anchors.fill: parent
+              anchors.margins: Style.space(18)
+              spacing: Style.space(18)
               Text {
-                id: dayHeader
-                visible: beginsDay
-                width: parent.width
-                height: visible ? implicitHeight + Style.space(8) : 0
-                horizontalAlignment: Text.AlignHCenter
-                text: root.dayLabel(modelData.timestamp)
-                textFormat: Text.PlainText
+                text: "OMALINK"
                 color: root.dim
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
+                font.pixelSize: Math.max(11, Style.font.caption)
+                font.letterSpacing: 2
               }
+              RowLayout {
+                Layout.fillWidth: true
+                Text {
+                  Layout.fillWidth: true
+                  text: qsTr("Messages")
+                  color: root.foreground
+                  font.family: root.readingFontFamily
+                  font.pixelSize: Math.max(25, Style.font.display)
+                  font.bold: true
+                }
+                PanelActionButton {
+                  visible: !root.readOnlyProvider
+                  enabled: !root.sending
+                  iconText: "󰐕"
+                  tooltipText: qsTr("New message")
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  onClicked: root.startCompose()
+                }
+                PanelActionButton {
+                  visible: !root.wideLayout
+                  iconText: "󰑐"
+                  tooltipText: qsTr("Refresh")
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  onClicked: root.refresh()
+                }
+                PanelActionButton {
+                  visible: !root.wideLayout
+                  iconText: "󰅖"
+                  tooltipText: qsTr("Close Messages")
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  onClicked: root.close()
+                }
+              }
+              Text {
+                visible: root.error !== "" || root.filteredConversations.length === 0
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: root.error || (root.loading ? qsTr("Loading conversations…") : root.searchText ? qsTr("No matches") : qsTr("No conversations yet"))
+                color: root.dim
+                font.family: root.readingFontFamily
+                font.pixelSize: root.labelSize
+              }
+              RowLayout {
+                visible: true
+                Layout.fillWidth: true
+                spacing: Style.space(8)
 
-              Rectangle {
-                id: bubble
-                anchors.top: dayHeader.bottom
-                anchors.topMargin: beginsDay ? Style.space(8) : 0
-                readonly property var attachments: Model.messageAttachments(modelData)
-                readonly property bool incomingMessage: modelData.incoming
-                readonly property color contentColor: incomingMessage ? root.foreground : Color.menu.selectedText
-                anchors.left: modelData.incoming ? parent.left : undefined
-                anchors.right: modelData.incoming ? undefined : parent.right
-                width: Math.min(
-                  (attachments.length > 0
-                    ? Math.max(messageText.implicitWidth, Style.space(210))
-                    : messageText.implicitWidth) + Style.space(24),
-                  parent.width * 0.78)
-                implicitHeight: messageColumn.implicitHeight + Style.space(16)
-                color: modelData.incoming
-                  ? Style.selectedFillFor(root.foreground, Color.accent)
-                  : Color.menu.selectedBackground
-                radius: Math.max(Style.cornerRadius, Style.space(10))
-                border.width: 0
-                border.color: Color.menu.selectedText
-
-                MouseArea {
-                  anchors.fill: parent
-                  acceptedButtons: Qt.RightButton
-                  onClicked: {
-                    messageText.selectAll()
-                    messageText.copy()
-                    messageText.deselect()
+                TextField {
+                  id: searchField
+                focusPolicy: Qt.StrongFocus
+                  Layout.fillWidth: true
+                  placeholderText: qsTr("Search conversations")
+                  text: root.searchText
+                  foreground: root.foreground
+                  font.family: root.readingFontFamily
+                  font.pixelSize: root.bodySize - 1
+                  verticalPadding: Style.space(12)
+                  onTextChanged: root.searchText = text
+                  Keys.onEscapePressed: {
+                    if (text !== "") text = ""
+                    else keyCatcher.forceActiveFocus()
                   }
                 }
 
-                ColumnLayout {
-                  id: messageColumn
-                  anchors.fill: parent
-                  anchors.margins: Style.space(8)
-                  spacing: Style.space(4)
+                PanelActionButton {
+                  visible: root.searchText !== ""
+                  iconText: "󰅖"
+                  tooltipText: "Clear search"
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  onClicked: {
+                    root.searchText = ""
+                    searchField.forceActiveFocus()
+                  }
+                }
+              }
 
-                  Repeater {
-                    model: bubble.attachments
+              ListView {
+                id: conversationList
+                visible: true
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                spacing: Style.space(6)
+                boundsBehavior: Flickable.StopAtBounds
+                interactive: contentHeight > height
+                model: root.filteredConversations
 
-                    Item {
-                      id: attachmentItem
-                      required property var modelData
-                      readonly property string kind: Model.attachmentKind(modelData.mimeType)
-                      readonly property string thumbUri: Model.thumbnailUri(modelData)
-                      readonly property bool showThumb: thumbUri !== "" && (kind === "image" || kind === "video")
-                      readonly property bool fetching: attachmentProcess.running
-                        && root.attachmentFetchUnique === String(modelData.unique || "")
-                      readonly property int thumbWidth: Math.min(Style.space(210), bubble.width - Style.space(24))
+                Controls.ScrollBar.vertical: Controls.ScrollBar { policy: Controls.ScrollBar.AsNeeded }
 
-                      Layout.preferredWidth: showThumb ? thumbWidth : -1
-                      Layout.fillWidth: !showThumb
-                      Layout.preferredHeight: showThumb
-                        ? (thumbImage.status === Image.Ready && thumbImage.implicitWidth > 0
-                          ? Math.min(Math.round(thumbWidth * thumbImage.implicitHeight / thumbImage.implicitWidth), Style.space(280))
-                          : Style.space(140))
-                        : tile.implicitHeight
+                delegate: Rectangle {
+                  required property var modelData
+                  width: ListView.view.width
+                  height: Style.space(88)
+                  activeFocusOnTab: true
+                  Accessible.role: Accessible.Button
+                  Accessible.name: Model.conversationTitle(modelData)
+                  Keys.onReturnPressed: root.selectThread(modelData)
+                  Keys.onSpacePressed: root.selectThread(modelData)
+                  readonly property bool selected: root.selectedConversation !== null
+                  && String(root.selectedConversation.threadId) === String(modelData.threadId)
+                  border.width: activeFocus ? 1 : 0
+                  border.color: Color.accent
+                  color: selected ? root.outgoingBackground : rowMouse.containsMouse ? root.incomingBackground : "transparent"
+                  radius: Style.space(12)
 
-                      ClippingRectangle {
-                        visible: attachmentItem.showThumb
-                        anchors.fill: parent
-                        radius: Style.cornerRadius
-                        color: "transparent"
+                  RowLayout {
+                    id: row
+                    anchors.fill: parent
+                    anchors.margins: Style.space(12)
+                    spacing: Style.space(10)
 
-                        Image {
-                          id: thumbImage
-                          anchors.fill: parent
-                          source: attachmentItem.thumbUri
-                          fillMode: Image.PreserveAspectCrop
-                          asynchronous: true
-                          sourceSize.width: 512
-                          sourceSize.height: 512
-                        }
+                    Rectangle {
+                      width: Style.space(42)
+                      height: width
+                      radius: Style.space(12)
+                      color: root.blend(Color.accent, root.sidebarBackground, 0.13)
 
-                        Rectangle {
-                          visible: attachmentItem.kind === "video" && !attachmentItem.fetching
-                          anchors.centerIn: parent
-                          width: Style.space(30)
-                          height: width
-                          radius: width / 2
-                          color: Qt.rgba(0, 0, 0, 0.55)
-
-                          Text {
-                            anchors.centerIn: parent
-                            text: "▶"
-                            color: "white"
-                            font.pixelSize: Style.font.caption
-                          }
-                        }
-
-                        Rectangle {
-                          visible: attachmentItem.fetching
-                          anchors.fill: parent
-                          color: Qt.rgba(0, 0, 0, 0.45)
-
-                          Text {
-                            anchors.centerIn: parent
-                            text: "Fetching…"
-                            color: "white"
-                            font.family: root.fontFamily
-                            font.pixelSize: Style.font.caption
-                          }
-                        }
+                      Text {
+                        anchors.centerIn: parent
+                        text: root.initials(modelData)
+                        textFormat: Text.PlainText
+                        font.bold: true
+                        color: root.foreground
+                        font.family: root.readingFontFamily
+                        font.pixelSize: root.bodySize - 1
                       }
-
                       Rectangle {
-                        id: tile
-                        visible: !attachmentItem.showThumb
-                        anchors.fill: parent
-                        implicitHeight: tileLabel.implicitHeight + Style.space(14)
-                        radius: Style.cornerRadius
-                        color: Qt.rgba(bubble.contentColor.r, bubble.contentColor.g, bubble.contentColor.b, 0.12)
+                        visible: !!modelData.unread
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.margins: -Style.space(2)
+                        width: Style.space(9); height: width; radius: width / 2
+                        color: Color.accent
+                        border.width: 2
+                        border.color: root.sidebarBackground
+                      }
+                    }
 
+                    ColumnLayout {
+                      Layout.fillWidth: true
+                      spacing: Style.space(6)
+
+                      RowLayout {
+                        Layout.fillWidth: true
                         Text {
-                          id: tileLabel
-                          anchors.verticalCenter: parent.verticalCenter
-                          anchors.left: parent.left
-                          anchors.leftMargin: Style.space(8)
-                          text: attachmentItem.fetching
-                            ? "Fetching…"
-                            : Model.attachmentLabel(attachmentItem.modelData.mimeType)
+                          Layout.fillWidth: true
+                          text: Model.conversationTitle(modelData)
                           textFormat: Text.PlainText
-                          color: bubble.contentColor
-                          font.family: root.fontFamily
-                          font.pixelSize: Style.font.caption
+                          color: root.foreground
+                          font.family: root.readingFontFamily
+                          font.pixelSize: root.bodySize - 1
                           font.bold: true
+                          elide: Text.ElideRight
+                        }
+                        Text {
+                          text: modelData.sendState === "unconfirmed" ? "Unconfirmed"
+                          : modelData.sendState === "failed" ? "Not submitted"
+                          : modelData.sendState ? "Pending"
+                          : Model.relativeTime(modelData.timestamp, root.nowMs)
+                          textFormat: Text.PlainText
+                          color: root.dim
+                          font.family: root.readingFontFamily
+                          font.pixelSize: Math.max(11, root.labelSize - 1)
                         }
                       }
 
-                      MouseArea {
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: root.openAttachment(attachmentItem.modelData)
+                      Text {
+                        Layout.fillWidth: true
+                        text: (modelData.incoming ? "" : "You: ") + Model.previewText(modelData)
+                        textFormat: Text.PlainText
+                        color: root.dim
+                        font.family: root.readingFontFamily
+                        font.pixelSize: root.labelSize
+                        elide: Text.ElideRight
+                        wrapMode: Text.Wrap
+                        maximumLineCount: 2
                       }
                     }
                   }
 
-                  Text {
-                    visible: root.readOnlyProvider && !!modelData.sender
-                    Layout.fillWidth: true
-                    text: modelData.sender || ""
-                    textFormat: Text.PlainText
-                    wrapMode: Text.Wrap
-                    color: bubble.contentColor
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
+                  MouseArea {
+                    id: rowMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                      root.selectThread(modelData)
+                    }
                   }
-                  Text {
-                    visible: root.readOnlyProvider && modelData.bodyTruncated === true
-                    text: qsTr("Message shortened by the backend or display limit")
-                    textFormat: Text.PlainText
-                    Layout.fillWidth: true
-                    wrapMode: Text.Wrap
-                    color: bubble.contentColor
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                  }
-                  TextEdit {
-                    id: messageText
-                    visible: text !== ""
-                    Layout.fillWidth: true
-                    readOnly: true
-                    selectByMouse: true
-                    textFormat: TextEdit.PlainText
-                    text: modelData.body !== ""
-                      ? modelData.body
-                      : (bubble.attachments.length === 0 && modelData.attachmentCount > 0 ? "Attachment" : "")
-                    color: modelData.incoming ? root.foreground : Color.menu.selectedText
-                    selectionColor: modelData.incoming ? Color.menu.selectedBackground : Color.popups.background
-                    selectedTextColor: modelData.incoming ? Color.menu.selectedText : root.foreground
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
-                    wrapMode: TextEdit.Wrap
-                  }
-
                 }
               }
+
+
+              Rectangle { Layout.fillWidth: true; height: 1; color: root.separator }
+              Text {
+                Layout.fillWidth: true
+                text: root.readOnlyProvider ? qsTr("BlueFerry · Local history") : root.deviceName
+                textFormat: Text.PlainText
+                elide: Text.ElideRight
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: root.labelSize
+              }
+            }
+          }
+          Rectangle {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            visible: root.wideLayout || root.selectedConversation !== null || root.composing || root.browsingContacts
+            color: root.windowBackground
+            ColumnLayout {
+              anchors.fill: parent
+              anchors.margins: Style.space(24)
+              anchors.leftMargin: Math.max(Style.space(24), (parent.width - Style.space(760)) / 2)
+              anchors.rightMargin: anchors.leftMargin
+              spacing: Style.space(root.compactHeight ? 10 : 16)
 
               RowLayout {
-                id: messageMeta
-                anchors.top: bubble.bottom
-                anchors.topMargin: Style.space(4)
-                anchors.left: modelData.incoming ? parent.left : undefined
-                anchors.right: modelData.incoming ? undefined : parent.right
-                spacing: Style.space(6)
+                Layout.fillWidth: true
+                spacing: Style.space(12)
+                PanelActionButton {
+                  visible: (!root.wideLayout && root.selectedConversation !== null) || root.composing || root.browsingContacts
+                  iconText: "󰁍"
+                  tooltipText: "Back to conversations"
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  onClicked: root.showConversations()
+                }
+
+                Rectangle {
+                  visible: root.selectedConversation !== null
+                  width: Style.space(46); height: width; radius: Style.space(14)
+                  color: root.outgoingBackground
+                  Text {
+                    anchors.centerIn: parent
+                    text: root.initials(root.selectedConversation)
+                    textFormat: Text.PlainText
+                    color: root.foreground
+                    font.family: root.readingFontFamily
+                    font.pixelSize: root.bodySize
+                    font.bold: true
+                  }
+                }
+
                 Text {
-                  text: Qt.formatTime(new Date(modelData.timestamp), "hh:mm")
+                  Layout.fillWidth: true
+                  text: root.selectedConversation
+                  ? Model.conversationTitle(root.selectedConversation)
+                  : (root.browsingContacts ? qsTr("Contacts") : root.composing ? "New message" : "Messages")
                   textFormat: Text.PlainText
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
+                  elide: Text.ElideRight
+                  color: root.foreground
+                  font.family: root.readingFontFamily
+                  font.pixelSize: Math.max(23, Style.font.display)
+                  font.bold: true
                 }
+
                 Button {
-                  visible: !!modelData.sendState
-                  text: SendState.label(modelData.sendState) + " ⓘ"
-                  tooltipText: SendState.detail(modelData.sendState)
+                  fontSize: root.bodySize - 1
+                  visible: !root.wideLayout && !root.readOnlyProvider && root.selectedConversation === null && !root.composing
+                  text: "New message"
+                  enabled: !root.readOnlyProvider
+                  foreground: root.foreground
+                  fontFamily: root.readingFontFamily
+                  bordered: true
+                  onClicked: root.startCompose()
+                }
+
+                Button {
+                  fontSize: root.bodySize - 1
+                  visible: root.readOnlyProvider && !root.browsingContacts && root.selectedConversation === null
+                  text: qsTr("Contacts")
+                  enabled: !root.providerInvalidated
                   focusable: true
-                  fontSize: Style.font.caption
-                  horizontalPadding: Style.space(2)
-                  verticalPadding: 0
+                  onClicked: root.showProviderContacts()
+                }
+
+                PanelActionButton {
+                  visible: !root.composing
+                  enabled: !root.providerInvalidated
+                  iconText: "󰑐"
+                  tooltipText: "Refresh"
                   foreground: root.foreground
                   fontFamily: root.fontFamily
-                  onClicked: showSendDetails = !showSendDetails
+                  onClicked: root.refresh()
                 }
-                Button {
-                  visible: !!modelData.localSend && (modelData.sendState === "failed" || modelData.sendState === "unconfirmed")
-                  text: qsTr("Edit copy")
-                  focusable: true
-                  fontSize: Style.font.caption
-                  verticalPadding: 0
+
+                PanelActionButton {
+                  iconText: "󰅖"
+                  tooltipText: qsTr("Close. Clears local activity; submitted sends may still finish.")
                   foreground: root.foreground
                   fontFamily: root.fontFamily
-                  enabled: !root.sending && !threadProcess.running
-                  onClicked: root.editSend(root.sendOperations.find(function(item) { return item.id === modelData.operationId }))
+                  onClicked: root.close()
                 }
               }
+
               Text {
-                id: sendDetails
-                visible: showSendDetails
-                anchors.top: messageMeta.bottom
-                anchors.topMargin: Style.space(8)
-                anchors.right: parent.right
-                width: parent.width * 0.78
-                text: SendState.detail(modelData.sendState)
+                Layout.fillWidth: true
+                text: root.readOnlyProvider ? qsTr("BlueFerry local history · Experimental") : qsTr("KDE Connect · %1").arg(root.deviceName)
+                textFormat: Text.PlainText
+                elide: Text.ElideRight
+                color: root.dim
+                font.family: root.readingFontFamily
+                font.pixelSize: root.labelSize
+              }
+
+              Text {
+                visible: root.readOnlyProvider
+                Layout.fillWidth: true
+                text: qsTr("Read-only, limited history observed by BlueFerry. It may be incomplete and is not tied to your selected KDE Connect phone. Viewing does not mark messages read.")
                 textFormat: Text.PlainText
                 wrapMode: Text.Wrap
                 color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
+                font.family: root.readingFontFamily
+                font.pixelSize: root.labelSize
               }
-            }
-          }
-          Button {
-            visible: root.selectedConversation !== null && !root.followingLatest
-            Layout.alignment: Qt.AlignHCenter
-            text: qsTr("Latest messages ↓")
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            focusable: true
-            onClicked: { root.followingLatest = true; messageList.positionViewAtEnd() }
-          }
 
-          ColumnLayout {
-            visible: root.composing
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            spacing: Style.space(10)
+              Rectangle { Layout.fillWidth: true; height: 1; color: root.separator }
 
-            Text {
-              text: "TO"
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              font.bold: true
-              font.letterSpacing: 1.2
-            }
-
-            TextField {
-              id: recipientField
-              Layout.fillWidth: true
-              enabled: !root.sending
-              placeholderText: "Contact name or phone number"
-              text: root.recipientQuery
-              foreground: root.foreground
-              font.family: root.fontFamily
-              onTextEdited: {
-                root.recipientQuery = text
-                root.recipientNumber = ""
-              }
-            }
-
-            ListView {
-              visible: root.filteredContacts.length > 0 && root.recipientNumber === ""
-              Layout.fillWidth: true
-              Layout.preferredHeight: Math.min(contentHeight, Style.space(220))
-              clip: true
-              spacing: Style.space(3)
-              model: root.filteredContacts
-
-              Controls.ScrollBar.vertical: Controls.ScrollBar { policy: Controls.ScrollBar.AsNeeded }
-
-              delegate: Rectangle {
-                required property var modelData
-                width: ListView.view.width
-                height: contactRow.implicitHeight + Style.space(14)
-                color: contactMouse.containsMouse
-                  ? Style.hoverFillFor(root.foreground, Color.accent)
-                  : "transparent"
-                radius: Style.cornerRadius
-
-                RowLayout {
-                  id: contactRow
-                  anchors.fill: parent
-                  anchors.margins: Style.space(7)
-                  spacing: Style.space(8)
-
+              Item {
+                visible: root.wideLayout && !root.selectedConversation && !root.composing && !root.browsingContacts
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                ColumnLayout {
+                  anchors.centerIn: parent
+                  width: Math.min(parent.width, Style.space(340))
+                  spacing: Style.space(16)
+                  Rectangle {
+                    Layout.alignment: Qt.AlignHCenter
+                    width: Style.space(76); height: width; radius: Style.space(22)
+                    color: root.outgoingBackground
+                    Text { anchors.centerIn: parent; text: "󰍩"; color: Color.accent; font.family: root.fontFamily; font.pixelSize: 32 }
+                  }
                   Text {
                     Layout.fillWidth: true
-                    text: modelData.name
-                    textFormat: Text.PlainText
+                    text: qsTr("Select a conversation")
+                    horizontalAlignment: Text.AlignHCenter
                     color: root.foreground
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
+                    font.family: root.readingFontFamily
+                    font.pixelSize: Math.max(23, Style.font.display)
                     font.bold: true
-                    elide: Text.ElideRight
                   }
-
                   Text {
-                    text: modelData.number
-                    textFormat: Text.PlainText
+                    Layout.fillWidth: true
+                    text: qsTr("Choose a thread on the left, or start a new message.")
+                    wrapMode: Text.Wrap
+                    horizontalAlignment: Text.AlignHCenter
                     color: root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
+                    font.family: root.readingFontFamily
+                    font.pixelSize: root.bodySize
+                  }
+                  Button {
+                    visible: !root.readOnlyProvider
+                    Layout.alignment: Qt.AlignHCenter
+                    text: qsTr("New message")
+                    bordered: true
+                    foreground: root.foreground
+                    fontFamily: root.readingFontFamily
+                    fontSize: root.bodySize
+                    onClicked: root.startCompose()
+                  }
+                }
+              }
+
+              RowLayout {
+                visible: root.latestSend !== null && root.selectedConversation === null
+                Layout.fillWidth: true
+                Text {
+                  Layout.fillWidth: true
+                  text: root.latestSend
+                  ? (root.latestSend.conversation ? Model.conversationTitle(root.latestSend.conversation) : root.latestSend.number)
+                  + ": " + SendState.label(root.latestSend.state) : ""
+                  textFormat: Text.PlainText
+                  wrapMode: Text.Wrap
+                  color: root.dim
+                  font.family: root.readingFontFamily
+                  font.pixelSize: root.labelSize
+                }
+                Button {
+                  fontSize: root.bodySize - 1
+                  text: "Edit copy"
+                  visible: root.latestSend !== null && (root.latestSend.state === "failed" || root.latestSend.state === "unconfirmed")
+                  enabled: !root.sending && !threadProcess.running
+                  foreground: root.foreground
+                  fontFamily: root.readingFontFamily
+                  onClicked: root.editSend(root.latestSend)
+                }
+              }
+
+              Text {
+                visible: !root.browsingContacts && (root.selectedConversation !== null || root.composing) && (root.error !== "" || (!root.composing && (root.loading || (root.selectedConversation ? root.messages.length === 0 : root.filteredConversations.length === 0))))
+                Layout.fillWidth: true
+                text: root.error !== "" ? root.error : (root.loading ? "Loading…" : (root.selectedConversation ? "No messages" : (root.searchText === "" ? "No conversations" : "No matches")))
+                color: root.dim
+                font.family: root.readingFontFamily
+                font.pixelSize: root.bodySize
+                horizontalAlignment: Text.AlignHCenter
+              }
+
+              TextField {
+                id: providerFilter
+                focusPolicy: Qt.StrongFocus
+                visible: root.browsingContacts
+                Layout.fillWidth: true
+                placeholderText: qsTr("Filter loaded contacts")
+                text: root.searchText
+                foreground: root.foreground
+                font.family: root.readingFontFamily
+                font.pixelSize: root.bodySize
+                onTextChanged: root.searchText = text
+              }
+
+              Text {
+                visible: root.browsingContacts
+                Layout.fillWidth: true
+                text: root.contactsError !== "" ? root.contactsError : ferryContacts.running ? qsTr("Loading contacts…")
+                : root.visibleProviderContacts.length === 0 ? qsTr("No contacts in this loaded subset") : ""
+                textFormat: Text.PlainText
+                wrapMode: Text.Wrap
+                color: root.dim
+                font.family: root.readingFontFamily
+                font.pixelSize: root.labelSize
+              }
+
+              ListView {
+                visible: root.browsingContacts
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                spacing: Style.space(8)
+                model: root.visibleProviderContacts
+                Controls.ScrollBar.vertical: Controls.ScrollBar { policy: Controls.ScrollBar.AsNeeded }
+                delegate: Item {
+                  required property var modelData
+                  width: ListView.view.width
+                  height: contactText.implicitHeight
+                  TextEdit {
+                    id: contactText
+                    width: parent.width
+                    text: modelData.name + "\n" + modelData.number
+                    textFormat: TextEdit.PlainText
+                    readOnly: true
+                    selectByMouse: true
+                    wrapMode: TextEdit.Wrap
+                    color: root.foreground
+                    font.family: root.readingFontFamily
+                    font.pixelSize: root.bodySize
+                    Accessible.name: modelData.name + ", " + modelData.number
+                  }
+                }
+              }
+
+              ListView {
+                id: messageList
+                objectName: "messageHistoryList"
+                visible: root.selectedConversation !== null
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                spacing: Style.space(3)
+                model: root.messages
+                boundsBehavior: Flickable.StopAtBounds
+                Controls.ScrollBar.vertical: Controls.ScrollBar { policy: Controls.ScrollBar.AsNeeded }
+                onMovementStarted: root.followingLatest = false
+                onMovementEnded: root.followingLatest = atYEnd || contentY - originY + height >= contentHeight - Style.space(24)
+                function followEnd() {
+                  if (root.followingLatest) Qt.callLater(function() {
+                    if (root.opened && root.followingLatest) messageList.positionViewAtEnd()
+                  })
+                }
+                onCountChanged: followEnd()
+                onContentHeightChanged: followEnd()
+                onHeightChanged: followEnd()
+
+                delegate: Item {
+                  required property var modelData
+                  required property int index
+                  property bool showSendDetails: false
+                  readonly property bool beginsDay: index === 0 || !root.messages[index - 1] || new Date(Number(root.messages[index - 1].timestamp)).toDateString()
+                  !== new Date(Number(modelData.timestamp)).toDateString()
+                  readonly property bool endsRun: !root.messages[index + 1]
+                  || root.messages[index + 1].incoming !== modelData.incoming
+                    || new Date(Number(root.messages[index + 1].timestamp)).toDateString() !== new Date(Number(modelData.timestamp)).toDateString()
+                  || Number(root.messages[index + 1].timestamp) - Number(modelData.timestamp) > 300000
+                  width: ListView.view.width
+                  height: dayHeader.height + (beginsDay ? Style.space(8) : 0)
+                  + bubble.implicitHeight + (messageMeta.visible ? messageMeta.implicitHeight + Style.space(6) : 0) + (endsRun ? Style.space(16) : Style.space(2))
+                  + (showSendDetails ? sendDetails.implicitHeight + Style.space(8) : 0)
+
+                  Item {
+                    id: dayHeader
+                    visible: beginsDay
+                    width: parent.width
+                    height: visible ? Style.space(44) : 0
+                    Rectangle {
+                      anchors.centerIn: parent
+                      width: dayText.implicitWidth + Style.space(28)
+                      height: Style.space(26)
+                      radius: height / 2
+                      color: root.sidebarBackground
+                      border.width: 1
+                      border.color: root.separator
+                      Text {
+                        id: dayText
+                        anchors.centerIn: parent
+                        text: root.dayLabel(modelData.timestamp)
+                        textFormat: Text.PlainText
+                        color: root.dim
+                        font.family: root.readingFontFamily
+                        font.pixelSize: root.labelSize
+                        font.weight: Font.Medium
+                      }
+                    }
+                  }
+
+                  Rectangle {
+                    id: bubble
+                    anchors.top: dayHeader.bottom
+                    anchors.topMargin: beginsDay ? Style.space(8) : 0
+                    readonly property var attachments: Model.messageAttachments(modelData)
+                    readonly property bool incomingMessage: modelData.incoming
+                    readonly property color contentColor: root.foreground
+                    anchors.left: modelData.incoming ? parent.left : undefined
+                    anchors.right: modelData.incoming ? undefined : parent.right
+                    width: Math.min(
+                    (attachments.length > 0
+                    ? Math.max(messageText.implicitWidth, Style.space(210))
+                    : messageText.implicitWidth) + Style.space(32),
+                    Math.min(Style.space(480), parent.width * 0.88))
+                    implicitHeight: messageColumn.implicitHeight + Style.space(24)
+                    color: modelData.incoming ? root.incomingBackground : root.outgoingBackground
+                    radius: Math.max(Style.cornerRadius, Style.space(14))
+                    border.width: 0
+                    border.color: Color.menu.selectedText
+
+                    MouseArea {
+                      anchors.fill: parent
+                      acceptedButtons: Qt.RightButton
+                      onClicked: {
+                        messageText.selectAll()
+                        messageText.copy()
+                        messageText.deselect()
+                      }
+                    }
+
+                    ColumnLayout {
+                      id: messageColumn
+                      anchors.fill: parent
+                      anchors.margins: Style.space(12)
+                      spacing: Style.space(6)
+
+                      Repeater {
+                        model: bubble.attachments
+
+                        Item {
+                          id: attachmentItem
+                          required property var modelData
+                          readonly property string kind: Model.attachmentKind(modelData.mimeType)
+                          readonly property string thumbUri: Model.thumbnailUri(modelData)
+                          readonly property bool showThumb: thumbUri !== "" && (kind === "image" || kind === "video")
+                          readonly property bool fetching: attachmentProcess.running
+                          && root.attachmentFetchUnique === String(modelData.unique || "")
+                          readonly property int thumbWidth: Math.min(Style.space(210), bubble.width - Style.space(24))
+
+                          Layout.preferredWidth: showThumb ? thumbWidth : -1
+                          Layout.fillWidth: !showThumb
+                          Layout.preferredHeight: showThumb
+                          ? (thumbImage.status === Image.Ready && thumbImage.implicitWidth > 0
+                          ? Math.min(Math.round(thumbWidth * thumbImage.implicitHeight / thumbImage.implicitWidth), Style.space(280))
+                          : Style.space(140))
+                          : tile.implicitHeight
+
+                          ClippingRectangle {
+                            visible: attachmentItem.showThumb
+                            anchors.fill: parent
+                            radius: Style.cornerRadius
+                            color: "transparent"
+
+                            Image {
+                              id: thumbImage
+                              anchors.fill: parent
+                              source: attachmentItem.thumbUri
+                              fillMode: Image.PreserveAspectCrop
+                              asynchronous: true
+                              sourceSize.width: 512
+                              sourceSize.height: 512
+                            }
+
+                            Rectangle {
+                              visible: attachmentItem.kind === "video" && !attachmentItem.fetching
+                              anchors.centerIn: parent
+                              width: Style.space(30)
+                              height: width
+                              radius: width / 2
+                              color: Qt.rgba(0, 0, 0, 0.55)
+
+                              Text {
+                                anchors.centerIn: parent
+                                text: "▶"
+                                color: "white"
+                                font.pixelSize: root.labelSize
+                              }
+                            }
+
+                            Rectangle {
+                              visible: attachmentItem.fetching
+                              anchors.fill: parent
+                              color: Qt.rgba(0, 0, 0, 0.45)
+
+                              Text {
+                                anchors.centerIn: parent
+                                text: "Fetching…"
+                                color: "white"
+                                font.family: root.readingFontFamily
+                                font.pixelSize: root.labelSize
+                              }
+                            }
+                          }
+
+                          Rectangle {
+                            id: tile
+                            visible: !attachmentItem.showThumb
+                            anchors.fill: parent
+                            implicitHeight: tileLabel.implicitHeight + Style.space(14)
+                            radius: Style.cornerRadius
+                            color: Qt.rgba(bubble.contentColor.r, bubble.contentColor.g, bubble.contentColor.b, 0.12)
+
+                            Text {
+                              id: tileLabel
+                              anchors.verticalCenter: parent.verticalCenter
+                              anchors.left: parent.left
+                              anchors.leftMargin: Style.space(8)
+                              text: attachmentItem.fetching
+                              ? "Fetching…"
+                              : Model.attachmentLabel(attachmentItem.modelData.mimeType)
+                              textFormat: Text.PlainText
+                              color: bubble.contentColor
+                              font.family: root.readingFontFamily
+                              font.pixelSize: root.labelSize
+                              font.bold: true
+                            }
+                          }
+
+                          MouseArea {
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.openAttachment(attachmentItem.modelData)
+                          }
+                        }
+                      }
+
+                      Text {
+                        visible: root.readOnlyProvider && !!modelData.sender
+                        Layout.fillWidth: true
+                        text: modelData.sender || ""
+                        textFormat: Text.PlainText
+                        wrapMode: Text.Wrap
+                        color: bubble.contentColor
+                        font.family: root.readingFontFamily
+                        font.pixelSize: root.labelSize
+                      }
+                      Text {
+                        visible: root.readOnlyProvider && modelData.bodyTruncated === true
+                        text: qsTr("Message shortened by the backend or display limit")
+                        textFormat: Text.PlainText
+                        Layout.fillWidth: true
+                        wrapMode: Text.Wrap
+                        color: bubble.contentColor
+                        font.family: root.readingFontFamily
+                        font.pixelSize: root.labelSize
+                      }
+                      TextEdit {
+                        id: messageText
+                        visible: text !== ""
+                        Layout.fillWidth: true
+                        readOnly: true
+                        selectByMouse: true
+                        textFormat: TextEdit.PlainText
+                        text: modelData.body !== ""
+                        ? modelData.body
+                        : (bubble.attachments.length === 0 && modelData.attachmentCount > 0 ? "Attachment" : "")
+                        color: root.foreground
+                        selectionColor: modelData.incoming ? Color.menu.selectedBackground : Color.popups.background
+                        selectedTextColor: Color.menu.selectedText
+                        font.family: root.readingFontFamily
+                        font.pixelSize: root.bodySize
+                        wrapMode: TextEdit.Wrap
+                      }
+
+                    }
+                  }
+
+                  RowLayout {
+                    id: messageMeta
+                    visible: endsRun || !!modelData.sendState
+                    anchors.top: bubble.bottom
+                    anchors.topMargin: Style.space(6)
+                    anchors.left: modelData.incoming ? parent.left : undefined
+                    anchors.right: modelData.incoming ? undefined : parent.right
+                    spacing: Style.space(6)
+                    Text {
+                      text: Qt.formatTime(new Date(modelData.timestamp), "hh:mm")
+                      textFormat: Text.PlainText
+                      color: root.dim
+                      font.family: root.readingFontFamily
+                      font.pixelSize: root.labelSize
+                    }
+                    Button {
+                      visible: !!modelData.sendState
+                      text: SendState.label(modelData.sendState)
+                      tooltipText: SendState.detail(modelData.sendState)
+                      focusable: true
+                      fontSize: root.labelSize
+                      horizontalPadding: Style.space(2)
+                      verticalPadding: 0
+                      foreground: root.foreground
+                      fontFamily: root.readingFontFamily
+                      onClicked: showSendDetails = !showSendDetails
+                    }
+                    Button {
+                      visible: !!modelData.localSend && (modelData.sendState === "failed" || modelData.sendState === "unconfirmed")
+                      text: qsTr("Edit copy")
+                      focusable: true
+                      fontSize: root.labelSize
+                      verticalPadding: 0
+                      foreground: root.foreground
+                      fontFamily: root.readingFontFamily
+                      enabled: !root.sending && !threadProcess.running
+                      onClicked: root.editSend(root.sendOperations.find(function(item) { return item.id === modelData.operationId }))
+                    }
+                  }
+                  Text {
+                    id: sendDetails
+                    visible: showSendDetails
+                    anchors.top: messageMeta.bottom
+                    anchors.topMargin: Style.space(8)
+                    anchors.right: parent.right
+                    width: parent.width * 0.78
+                    text: SendState.detail(modelData.sendState)
+                    textFormat: Text.PlainText
+                    wrapMode: Text.Wrap
+                    color: root.dim
+                    font.family: root.readingFontFamily
+                    font.pixelSize: root.labelSize
+                  }
+                }
+              }
+              Button {
+                fontSize: root.bodySize - 1
+                visible: root.selectedConversation !== null && !root.followingLatest
+                Layout.alignment: Qt.AlignHCenter
+                text: qsTr("Latest messages ↓")
+                foreground: root.foreground
+                fontFamily: root.readingFontFamily
+                focusable: true
+                onClicked: { root.followingLatest = true; messageList.positionViewAtEnd() }
+              }
+
+              ColumnLayout {
+                visible: root.composing
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                spacing: Style.space(root.compactHeight ? 8 : 12)
+
+                Text {
+                  visible: !root.compactHeight
+                  text: "TO"
+                  color: root.dim
+                  font.family: root.readingFontFamily
+                  font.pixelSize: root.labelSize
+                  font.bold: true
+                  font.letterSpacing: 1.2
+                }
+
+                TextField {
+                  id: recipientField
+                  focusPolicy: Qt.StrongFocus
+                  objectName: "recipientInput"
+                  Layout.fillWidth: true
+                  enabled: !root.sending
+                  placeholderText: "Contact name or phone number"
+                  text: root.recipientQuery
+                  foreground: root.foreground
+                  font.family: root.readingFontFamily
+                  font.pixelSize: root.bodySize
+                  verticalPadding: Style.space(10)
+                  onTextEdited: {
+                    root.recipientQuery = text
+                    root.recipientNumber = ""
                   }
                 }
 
-                MouseArea {
-                  id: contactMouse
+                ListView {
+                  visible: root.filteredContacts.length > 0 && root.recipientNumber === ""
+                  Layout.fillWidth: true
+                  Layout.preferredHeight: Math.min(contentHeight, Style.space(root.compactHeight ? 52 : 180))
+                  clip: true
+                  spacing: Style.space(3)
+                  model: root.filteredContacts
+
+                  Controls.ScrollBar.vertical: Controls.ScrollBar { policy: Controls.ScrollBar.AsNeeded }
+
+                  delegate: Rectangle {
+                    required property var modelData
+                    width: ListView.view.width
+                    height: contactRow.implicitHeight + Style.space(14)
+                    color: contactMouse.containsMouse
+                    ? Style.hoverFillFor(root.foreground, Color.accent)
+                    : "transparent"
+                    radius: Style.cornerRadius
+
+                    RowLayout {
+                      id: contactRow
+                      anchors.fill: parent
+                      anchors.margins: Style.space(7)
+                      spacing: Style.space(8)
+
+                      Text {
+                        Layout.fillWidth: true
+                        text: modelData.name
+                        textFormat: Text.PlainText
+                        color: root.foreground
+                        font.family: root.readingFontFamily
+                        font.pixelSize: root.bodySize
+                        font.bold: true
+                        elide: Text.ElideRight
+                      }
+
+                      Text {
+                        text: modelData.number
+                        textFormat: Text.PlainText
+                        color: root.dim
+                        font.family: root.readingFontFamily
+                        font.pixelSize: root.labelSize
+                      }
+                    }
+
+                    MouseArea {
+                      id: contactMouse
+                      anchors.fill: parent
+                      hoverEnabled: true
+                      cursorShape: Qt.PointingHandCursor
+                      onClicked: root.chooseContact(modelData)
+                    }
+                  }
+                }
+
+                Text {
+                  visible: !root.compactHeight
+                  text: "MESSAGE"
+                  color: root.dim
+                  font.family: root.readingFontFamily
+                  font.pixelSize: root.labelSize
+                  font.bold: true
+                  font.letterSpacing: 1.2
+                }
+
+                Controls.TextArea {
+                  id: composeMessage
+                  focusPolicy: Qt.StrongFocus
+                  Layout.minimumHeight: Style.space(60)
+                  Layout.fillWidth: true
+                  Layout.fillHeight: true
+                  enabled: !root.sending
+                  textFormat: TextEdit.PlainText
+                  placeholderText: root.sending ? "Sending…" : "Write a message"
+                  color: root.foreground
+                  placeholderTextColor: root.dim
+                  selectionColor: Color.menu.selectedBackground
+                  selectedTextColor: Color.menu.selectedText
+                  font.family: root.readingFontFamily
+                  font.pixelSize: root.bodySize
+                  wrapMode: TextEdit.Wrap
+                  padding: Style.space(10)
+                  background: Rectangle {
+                    color: root.sidebarBackground
+                    border.width: 1
+                    border.color: composeMessage.activeFocus ? Color.accent : root.separator
+                    radius: Style.space(14)
+                  }
+                }
+
+                RowLayout {
+                  Layout.alignment: Qt.AlignRight
+                  spacing: Style.space(8)
+
+                  Button {
+                    fontSize: root.bodySize - 1
+                    text: "Cancel"
+                    enabled: !root.sending
+                    foreground: root.foreground
+                    fontFamily: root.readingFontFamily
+                    onClicked: root.showConversations()
+                  }
+
+                  Button {
+                    fontSize: root.bodySize - 1
+                    text: root.sending ? "Sending…" : "Send"
+                    enabled: !root.sending
+                    && (root.recipientNumber !== "" || recipientField.text.trim() !== "")
+                    && composeMessage.text.trim() !== ""
+                    foreground: root.foreground
+                    fontFamily: root.readingFontFamily
+                    bordered: true
+                    onClicked: root.sendNewMessage()
+                  }
+                }
+              }
+
+              Rectangle {
+                visible: root.selectedConversation !== null && !root.readOnlyProvider
+                Layout.fillWidth: true
+                implicitHeight: replyRow.implicitHeight + Style.space(20)
+                color: root.sidebarBackground
+                radius: Style.space(16)
+                border.width: 1
+                border.color: replyField.activeFocus ? root.blend(Color.accent, root.windowBackground, 0.55) : root.separator
+                RowLayout {
+                  id: replyRow
                   anchors.fill: parent
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: root.chooseContact(modelData)
+                  anchors.margins: Style.space(10)
+                  spacing: Style.space(12)
+
+                  Controls.ScrollView {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: Math.min(Style.space(130), Math.max(Style.space(48), replyField.implicitHeight))
+                    contentWidth: availableWidth
+                    Controls.TextArea {
+                      id: replyField
+                      objectName: "replyComposer"
+                      activeFocusOnPress: true
+                      focusPolicy: Qt.StrongFocus
+                      enabled: !root.sending
+                      placeholderText: qsTr("Write a message…")
+                      textFormat: TextEdit.PlainText
+                      color: root.foreground
+                      placeholderTextColor: root.dim
+                      selectionColor: Color.menu.selectedBackground
+                      selectedTextColor: Color.menu.selectedText
+                      wrapMode: TextEdit.Wrap
+                      font.family: root.readingFontFamily
+                      font.pixelSize: root.bodySize
+                      padding: Style.space(12)
+                      background: Item {}
+                      Keys.onReturnPressed: function(event) {
+                        if (!(event.modifiers & Qt.ShiftModifier)) { root.sendReply(); event.accepted = true }
+                        else event.accepted = false
+                      }
+                      Keys.onEnterPressed: function(event) {
+                        if (!(event.modifiers & Qt.ShiftModifier)) { root.sendReply(); event.accepted = true }
+                        else event.accepted = false
+                      }
+                    }
+                  }
+
+                  Button {
+                    text: qsTr("Send")
+                    iconText: "󰒊"
+                    fontSize: root.bodySize - 1
+                    horizontalPadding: Style.space(14)
+                    verticalPadding: Style.space(12)
+                    background: root.outgoingBackground
+                    opacity: enabled ? 1 : 0.45
+                    focusable: true
+                    enabled: !root.sending && replyField.text.trim() !== ""
+                    && root.selectedConversation !== null && root.selectedConversation.threadId !== null
+                    foreground: root.foreground
+                    fontFamily: root.readingFontFamily
+                    bordered: true
+                    onClicked: root.sendReply()
+                  }
                 }
+
               }
-            }
-
-            Text {
-              text: "MESSAGE"
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              font.bold: true
-              font.letterSpacing: 1.2
-            }
-
-            Controls.TextArea {
-              id: composeMessage
-              Layout.fillWidth: true
-              Layout.fillHeight: true
-              enabled: !root.sending
-              placeholderText: root.sending ? "Sending…" : "Write a message"
-              color: root.foreground
-              placeholderTextColor: root.dim
-              selectionColor: Color.menu.selectedBackground
-              selectedTextColor: Color.menu.selectedText
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-              wrapMode: TextEdit.Wrap
-              padding: Style.space(10)
-              background: BorderSurface {
-                color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.04)
-                borderSpec: Border.flat(Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.16), 1)
-                radius: Style.cornerRadius
-              }
-            }
-
-            RowLayout {
-              Layout.alignment: Qt.AlignRight
-              spacing: Style.space(8)
-
-              Button {
-                text: "Cancel"
-                enabled: !root.sending
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                onClicked: root.showConversations()
-              }
-
-              Button {
-                text: root.sending ? "Sending…" : "Send"
-                enabled: !root.sending
-                  && (root.recipientNumber !== "" || recipientField.text.trim() !== "")
-                  && composeMessage.text.trim() !== ""
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                bordered: true
-                onClicked: root.sendNewMessage()
-              }
-            }
-          }
-
-          RowLayout {
-            visible: root.selectedConversation !== null && !root.readOnlyProvider
-            Layout.fillWidth: true
-            spacing: Style.space(8)
-
-            Controls.ScrollView {
-              Layout.fillWidth: true
-              Layout.preferredHeight: Math.min(Style.space(130), Math.max(Style.space(44), replyField.implicitHeight))
-              contentWidth: availableWidth
-              Controls.TextArea {
-                id: replyField
-                enabled: !root.sending
-                placeholderText: qsTr("Message")
-                textFormat: TextEdit.PlainText
-                color: root.foreground
-                placeholderTextColor: root.dim
-                selectionColor: Color.menu.selectedBackground
-                selectedTextColor: Color.menu.selectedText
-                wrapMode: TextEdit.Wrap
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.body
-                padding: Style.space(12)
-                background: Rectangle {
-                  color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.07)
-                  radius: Math.max(Style.cornerRadius, Style.space(10))
-                  border.width: replyField.activeFocus ? 1 : 0
-                  border.color: Color.accent
-                }
-                Keys.onReturnPressed: function(event) {
-                  if (!(event.modifiers & Qt.ShiftModifier)) { root.sendReply(); event.accepted = true }
-                  else event.accepted = false
-                }
-                Keys.onEnterPressed: function(event) {
-                  if (!(event.modifiers & Qt.ShiftModifier)) { root.sendReply(); event.accepted = true }
-                  else event.accepted = false
-                }
-              }
-            }
-
-            Button {
-              text: "Send"
-              enabled: !root.sending && replyField.text.trim() !== ""
-                && root.selectedConversation !== null && root.selectedConversation.threadId !== null
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              bordered: true
-              onClicked: root.sendReply()
-            }
-          }
-
-          Text {
-            Layout.fillWidth: true
-            text: root.readOnlyProvider
-              ? (root.browsingContacts ? qsTr("Showing up to 200 cached contact addresses. Filtering searches this loaded subset.") : qsTr("Bounded local history · R to refresh · Esc to go back"))
-              : root.selectedConversation
-              ? "Enter to send · Shift+Enter for a new line"
-              : root.composing
+              Text {
+                Layout.fillWidth: true
+                visible: root.selectedConversation !== null || root.composing || root.browsingContacts
+                text: root.readOnlyProvider
+                ? (root.browsingContacts ? qsTr("Showing up to 200 cached contact addresses. Filtering searches this loaded subset.") : qsTr("Bounded local history · R to refresh · Esc to go back"))
+                : root.selectedConversation
+                ? "Enter to send · Shift+Enter for a new line"
+                : root.composing
                 ? "Choose a synced contact or enter a phone number · Esc to cancel"
                 : root.filteredConversations.length + " of " + root.conversations.length
                 + " conversations · / search · PgUp/PgDn · Home/End"
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            horizontalAlignment: Text.AlignHCenter
+                color: root.dim
+                font.family: root.readingFontFamily
+                font.pixelSize: Math.max(11, root.labelSize - 1)
+                wrapMode: Text.Wrap
+                horizontalAlignment: Text.AlignHCenter
+              }
+            }
           }
         }
       }
-
       Rectangle {
         visible: root.viewerOpen
         anchors.fill: parent
@@ -1844,8 +2164,8 @@ Item {
             ? "Could not display this image"
             : "Fetching full image from the phone…"
           color: "white"
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.body
+          font.family: root.readingFontFamily
+          font.pixelSize: root.bodySize
         }
 
         ColumnLayout {
@@ -1861,8 +2181,8 @@ Item {
             text: root.viewerStatus
             textFormat: Text.PlainText
             color: "white"
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
+            font.family: root.readingFontFamily
+            font.pixelSize: root.labelSize
           }
 
           RowLayout {
@@ -1870,19 +2190,21 @@ Item {
             spacing: Style.space(8)
 
             Button {
+              fontSize: root.bodySize - 1
               text: "Open"
               enabled: root.viewerPath !== ""
               foreground: "white"
-              fontFamily: root.fontFamily
+              fontFamily: root.readingFontFamily
               bordered: true
               onClicked: root.openAttachmentExternally(root.viewerPath)
             }
 
             Button {
+              fontSize: root.bodySize - 1
               text: "Save to Downloads"
               enabled: root.viewerPath !== "" && !saveProcess.running
               foreground: "white"
-              fontFamily: root.fontFamily
+              fontFamily: root.readingFontFamily
               bordered: true
               onClicked: {
                 saveProcess.command = [root.helperPath, "attachment-save", root.viewerPath]
@@ -1892,9 +2214,10 @@ Item {
             }
 
             Button {
+              fontSize: root.bodySize - 1
               text: "Close"
               foreground: "white"
-              fontFamily: root.fontFamily
+              fontFamily: root.readingFontFamily
               onClicked: root.closeViewer()
             }
           }

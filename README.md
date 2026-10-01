@@ -199,7 +199,10 @@ Messages opens as a normal desktop window titled **OmaLink Messages**. Tile,
 float, resize or pin it with your usual window controls, and leave it open while
 using other apps. Opening Messages again for the same phone brings the existing
 window forward and keeps its current conversation, draft and scroll position.
-Closing it clears the local session.
+Wide windows keep the conversation list beside the current thread; narrow
+windows show one pane at a time. Messages use readable proportional type, with
+Omarchy's theme colors and compact controls. Up to five previous conversation
+drafts stay in memory while you switch threads. Closing clears the local session.
 
 SMS notifications and unread SMS history share one Messages section. A unique
 exact sender match combines them; an ambiguous sender stays visible separately.
