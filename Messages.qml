@@ -18,6 +18,7 @@ Item {
 
   // The shell injects its public, reactive bar settings into overlay plugins.
   property var shell: null
+  readonly property string messageTimeFormat: Model.messageTimeFormat(shell ? shell.barConfig : null)
   readonly property bool blueFerryEnabled: BlueFerry.enabledInBar(shell ? shell.barConfig : null)
   onBlueFerryEnabledChanged: if (!blueFerryEnabled && readOnlyProvider) close()
   property bool opened: false
@@ -1839,7 +1840,8 @@ Item {
                     anchors.right: modelData.incoming ? undefined : parent.right
                     spacing: Style.space(6)
                     Text {
-                      text: Qt.formatTime(new Date(modelData.timestamp), "hh:mm")
+                      objectName: "messageTimestamp"
+                      text: Qt.formatTime(new Date(modelData.timestamp), root.messageTimeFormat)
                       textFormat: Text.PlainText
                       color: root.dim
                       font.family: root.readingFontFamily

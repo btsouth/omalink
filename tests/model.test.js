@@ -238,3 +238,15 @@ assert.equal(model.messageInbox([becca],[{...sms,packageName:""}]).notifications
 
 assert.equal(model.findConversationByTitle([becca,{...becca,threadId:8}], "Becca"), null,
   "an ambiguous notification must not open the first matching recipient")
+
+const clockBar = (format, section = "center") => ({layout:{[section]:[{id:"omarchy.clock",format}]}})
+assert.equal(model.messageTimeFormat(clockBar("ddd d MMM h:mm AP")), "h:mm AP")
+assert.equal(model.messageTimeFormat(clockBar("h:mm:ss ap", "right")), "h:mm ap")
+assert.equal(model.messageTimeFormat(clockBar("hh:mm A", "left")), "h:mm A")
+assert.equal(model.messageTimeFormat(clockBar("dddd HH:mm")), "HH:mm")
+assert.equal(model.messageTimeFormat(clockBar("HH:mm AP")), "HH:mm", "capital H stays 24-hour in Qt")
+assert.equal(model.messageTimeFormat(clockBar("HH:mm 'AP'")), "HH:mm", "quoted text is not a period token")
+assert.equal(model.messageTimeFormat(clockBar("'h:mm AP' yyyy")), "HH:mm")
+assert.equal(model.messageTimeFormat(null), "HH:mm")
+assert.equal(model.messageTimeFormat({layout:{center:[null,{id:"other.clock",format:"h:mm AP"}]}}), "HH:mm")
+assert.equal(model.messageTimeFormat({position:"left",layout:{center:[{id:"omarchy.clock",format:"HH:mm",verticalFormat:"h\nmm AP"}]}}), "h:mm AP")

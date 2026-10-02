@@ -578,6 +578,27 @@ function conversationTitle(conversation) {
   return String(values[0]) + " +" + (values.length - 1)
 }
 
+// Match the active Omarchy clock's hour convention, without its date or seconds.
+function messageTimeFormat(barConfig) {
+  var layout = barConfig && barConfig.layout
+  if (!layout || typeof layout !== "object") return "HH:mm"
+  var vertical = barConfig.position === "left" || barConfig.position === "right"
+  for (var section of ["left", "center", "right"]) {
+    var entries = layout[section]
+    if (!Array.isArray(entries)) continue
+    for (var entry of entries) {
+      if (!entry || entry.id !== "omarchy.clock") continue
+      var format = vertical ? entry.verticalFormat : entry.format
+      if (typeof format !== "string") return "HH:mm"
+      var pattern = format.replace(/'[^']*'/g, "")
+      var period = pattern.match(/AP|ap|A|a/)
+      return /h/.test(pattern) && !/H/.test(pattern) && period
+        ? "h:mm " + period[0] : "HH:mm"
+    }
+  }
+  return "HH:mm"
+}
+
 function relativeTime(timestamp, now) {
   var value = Number(timestamp)
   if (!isFinite(value) || value <= 0) return ""
@@ -643,6 +664,7 @@ if (typeof module !== "undefined") {
     findConversationByThreadId: findConversationByThreadId,
     findConversationByTitle: findConversationByTitle,
     conversationTitle: conversationTitle,
+    messageTimeFormat: messageTimeFormat,
     relativeTime: relativeTime
   }
 }

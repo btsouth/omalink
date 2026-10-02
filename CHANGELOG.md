@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Follow Omarchy's clock setting for 12- or 24-hour message timestamps.
+
 - Redesign Messages with a responsive conversation sidebar, readable type,
   grouped message cards, clearer contrast and a separate reply composer.
 - Keep separate drafts while switching threads, and keep the

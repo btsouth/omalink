@@ -53,6 +53,14 @@ done
 ipc thread
 await_state '.opened and .visible and .threadId == 7 and .rows == 3'
 await_client '[.[] | select(.title == "OmaLink Messages")] | length == 1'
+# The same visible timestamp follows live clock changes without reopening.
+[[ $(ipc timestamp) =~ ^[0-9]{2}:[0-9]{2}$ ]]
+ipc clockFormat 'ddd d MMM h:mm AP'
+[[ $(ipc timestamp) =~ ^[0-9]{1,2}:[0-9]{2}\ (AM|PM)$ ]]
+ipc clockFormat 'h:mm ap'
+[[ $(ipc timestamp) =~ ^[0-9]{1,2}:[0-9]{2}\ (am|pm)$ ]]
+ipc clockFormat 'dddd HH:mm'
+[[ $(ipc timestamp) =~ ^[0-9]{2}:[0-9]{2}$ ]]
 address="$(hyprctl -j clients | jq -r '.[] | select(.title == "OmaLink Messages") | .address')"
 [[ $address =~ ^0x[0-9a-fA-F]+$ ]]
 selector="address:$address"

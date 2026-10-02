@@ -26,6 +26,7 @@ ShellRoot {
   QtObject {
     id: fakeShell
     function updateEntryInline(id, value) { return true }
+    property var barConfig: ({layout:{center:[{id:"omarchy.clock",format:"dddd HH:mm"}]}})
     property bool reject: false
     function summon(id, value) { return !reject && messages.open(value) }
   }
@@ -56,9 +57,16 @@ ShellRoot {
       settings: ({selectedDeviceId: "fixture", selectedDeviceName: "Test phone"})
     }
   }
-  Plugin.Messages { id: messages }
+  Plugin.Messages { id: messages; shell: fakeShell }
   IpcHandler {
     target: "omalink-review"
+    function clockFormat(format: string): void {
+      fakeShell.barConfig = {layout:{center:[{id:"omarchy.clock",format:format}]}}
+    }
+    function timestamp(): string {
+      var item = fixture.findItem(fixture.messageWindow().contentItem, "messageTimestamp")
+      return item ? item.text : ""
+    }
     function ready(): string { return messages.messages.length > 0 ? "yes" : "no" }
     function session(): string {
       var window = fixture.messageWindow()
