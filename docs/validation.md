@@ -69,12 +69,19 @@ lifecycle behavior. Inspect the
 affected UI in omabox as well, including keyboard navigation and both light and
 dark themes. A successful CI job does not imply these checks ran.
 
+The inbox navigation fixture covers acknowledgment after a successful thread
+load, fresh incoming messages reusing a notification ID, already-open thread
+routing and retained drafts. Rejected launches, failed or stale history,
+ambiguous senders and notification dismissal failures keep the entry available.
+
 The Messages window test exercises real Hyprland tiling, focus, floating,
 resizing, pinning, per-conversation draft retention and close/reopen cleanup.
 It keeps a draft and local send record through two scheduled history refreshes
 with a synthetic phone. Minimize requests may be ignored by Hyprland; the test checks that requesting one does
 not clear the session. Draft checks cover thread switches, the five-draft bound
-and cleanup on close. It does not establish an hours-long soak or phone delivery.
+and cleanup on close. New-message text and recipient survive navigation; native
+close offers Keep editing or Discard and close when any unsent draft remains.
+The close guard also covers mouse and keyboard controls. It does not establish an hours-long soak or phone delivery.
 
 For a realistic visual fixture:
 

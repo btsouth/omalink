@@ -73,7 +73,8 @@ ShellRoot {
       return JSON.stringify({opened: messages.opened, draft: messages.replyText,
         generation: messages.generation, composing: messages.composing, followingLatest: messages.followingLatest,
         threadId: messages.selectedConversation ? messages.selectedConversation.threadId : null,
-        rows: messages.messages.length, operations: messages.sendOperations.length,
+        composeBody:messages.composeText, recipient:messages.recipientQuery, savedCompose:messages.newMessageDraft,
+        closePrompt:messages.closeConfirmationOpen, hasDrafts:messages.hasUnsentDrafts, rows: messages.messages.length, operations: messages.sendOperations.length,
         caches: Object.keys(messages.messageCache).length, drafts: Object.keys(messages.replyDrafts).length, wide: messages.wideLayout,
         visible: window ? window.visible : false, minimized: window ? window.minimized : false})
     }
@@ -82,6 +83,17 @@ ShellRoot {
       return messages.selectedConversation !== null && messages.selectedConversation.threadId === threadId
     }
     function compose(): void { messages.startCompose() }
+    function composeDraft(number: string, body: string): void {
+      messages.startCompose()
+      messages.recipientQuery = number
+      messages.recipientNumber = number
+      messages.composeText = body
+    }
+    function requestClose(): void { messages.requestClose() }
+    function keepEditing(): void { messages.keepEditing() }
+    function discardDrafts(): void { messages.close() }
+    function settings(): void { panel.showSettings = !panel.showSettings }
+
     function conversations(): void { messages.showConversations() }
     function older(): void {
       var list = fixture.findItem(fixture.messageWindow().contentItem, "messageHistoryList")
@@ -110,6 +122,7 @@ ShellRoot {
       return JSON.stringify({panelOpen: panel.opened, messagesOpen: messages.opened,
         threadId: messages.selectedConversation ? messages.selectedConversation.threadId : null,
         rows: messages.messages.length, entries: panel.messageEntries.length, error: messages.error,
+        loading:messages.loading, readingHistory:messages.readingHistory,
         notificationOnly: panel.messageEntries.length > 0 && !!panel.messageEntries[0].notificationOnly})
     }
     function reject(value: bool): void { fakeShell.reject = value }
@@ -141,6 +154,7 @@ ShellRoot {
     }
     function clear(): void { panel.clearMessageEntries(panel.messageEntries) }
     function inbox(): void { messages.close(); panel.open() }
+    function peekInbox(): void { panel.close(); panel.open() }
     function thread(): void { bootstrapPanel.stop(); panel.close(); messages.open('{"deviceId":"fixture","deviceName":"Test phone","threadId":7}') }
     function pending(): void {
       var operation = messages.prepareSend(messages.selectedConversation, "", "On my way!", true)

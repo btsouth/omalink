@@ -203,13 +203,17 @@ Wide windows keep the conversation list beside the current thread; narrow
 windows show one pane at a time. Messages use readable proportional type, with
 Omarchy's theme colors and compact controls. Timestamps follow the bar clock's
 12- or 24-hour setting. Up to five previous conversation drafts stay in memory
-while you switch threads. Closing clears the local session.
+while you switch threads. New-message text and its recipient also stay in memory
+while navigating. Closing with unsent drafts offers Keep editing or Discard and
+close; confirming close clears the local session.
 
 SMS notifications and unread SMS history share one Messages section. A unique
 exact sender match combines them; an ambiguous sender stays visible separately.
 A notification can appear before its SMS history is available. Other app
 notifications keep their own section. Clearing an inbox row clears OmaLink's
 local unread state and requests dismissal of associated phone notifications.
+Opening a row does the same after its matching conversation loads successfully.
+Failed loads and histories older than the clicked message leave the row available.
 
 A request distinguishes submission, backend acceptance, history observation,
 and an unknown outcome. A successful helper call means acceptance, not delivery.

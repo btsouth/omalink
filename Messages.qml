@@ -12,6 +12,7 @@ import "ProviderModel.js" as Providers
 import "BlueFerryModel.js" as BlueFerry
 import "SendState.js" as SendState
 import "PrivateText.js" as PrivateText
+import "InboxEvents.js" as InboxEvents
 
 Item {
   id: root
@@ -54,12 +55,16 @@ Item {
   property var cacheOrder: []
   property string loadingThreadId: ""
   property bool sending: false
+  onSendingChanged: if (!sending && opened) Qt.callLater(function() { root.applyPendingConversation(false) })
   property string pendingReply: ""
   property string pendingThreadId: ""
   property string searchText: ""
   property string pendingOpenTitle: ""
   property string pendingOpenThreadId: ""
+  property var pendingReadEntry: null
+  property var readActions: []
   property bool loading: false
+  readonly property bool readingHistory: threadProcess.running
   // The generation whose thread list came from a full conversations read.
   property int conversationsAppliedGeneration: -1
   property string error: ""
@@ -94,6 +99,15 @@ Item {
   readonly property bool wideLayout: messagesWindow.width >= Style.space(900)
   property var replyDrafts: ({})
   property var draftOrder: []
+  property var newMessageDraft: null
+  property bool closeConfirmationOpen: false
+  readonly property bool hasUnsentDrafts: replyText.trim() !== ""
+    || composeText.trim() !== "" || recipientQuery.trim() !== ""
+    || (!composing && newMessageDraft !== null && (newMessageDraft.body.trim() !== "" || newMessageDraft.query.trim() !== ""))
+    || Object.keys(replyDrafts).some(function(key) {
+      return key !== root.draftKey(root.selectedConversation) && String(replyDrafts[key] || "").trim() !== ""
+    })
+
 
   function blend(front, back, amount) {
     return Qt.rgba(front.r * amount + back.r * (1 - amount),
@@ -127,6 +141,7 @@ Item {
 
   function selectThread(conversation) {
     if (sending || threadProcess.running) return
+    rememberNewMessageDraft()
     composing = false
     browsingContacts = false
     closeViewer()
@@ -193,7 +208,9 @@ Item {
     var sameSession = opened && nextKey === endpointKey && backendOwner === nextOwner
     var sameThread = selectedConversation && payload.threadId !== undefined && payload.threadId !== null
       && String(payload.threadId) === String(selectedConversation.threadId)
-    if (sameSession && (sameThread || ((payload.threadId === undefined || payload.threadId === null) && !payload.conversationHint))) {
+    var hasTarget = (payload.threadId !== undefined && payload.threadId !== null) || !!payload.conversationHint
+    if (sameSession && sending && hasTarget && !sameThread) return false
+    if (sameSession && ((sameThread && !payload.readEntry) || !hasTarget)) {
       presentWindow()
       return true
     }
@@ -205,12 +222,21 @@ Item {
     pendingOpenTitle = String(payload.conversationHint || "")
     pendingOpenThreadId = payload.threadId === undefined || payload.threadId === null
       ? "" : String(payload.threadId)
+    var ids = payload.readEntry && Array.isArray(payload.readEntry.notificationIds)
+      ? payload.readEntry.notificationIds : []
+    ids = ids.filter(function(id, index) {
+      return typeof id === "string" && /^[A-Za-z0-9_][A-Za-z0-9._:-]{0,127}$/.test(id)
+        && ids.indexOf(id) === index
+    }).slice(0, 25)
+    pendingReadEntry = payload.readEntry && hasTarget
+      ? {threadId: "", timestamp: Math.max(0, Number(payload.readEntry.timestamp) || 0), notificationIds: ids} : null
     searchText = ""
     opened = true
     presentWindow()
     refreshContacts()
     refreshCachedConversations()
-    refresh()
+    if (hasTarget) refreshConversations()
+    else refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
     return true
   }
@@ -229,7 +255,45 @@ Item {
     }
   }
 
+  function requestClose() {
+    if (!opened) return
+    if (!hasUnsentDrafts) { close(); return }
+    closeConfirmationOpen = true
+    restoreCloseWindow.restart()
+  }
+
+  function keepEditing() {
+    closeConfirmationOpen = false
+    Qt.callLater(function() {
+      if (root.composing) composeMessage.forceActiveFocus()
+      else if (root.selectedConversation) replyField.forceActiveFocus()
+      else keyCatcher.forceActiveFocus()
+    })
+  }
+
+  // Qt.callLater may wait for a render cycle after the native window hides.
+  // A zero-duration event-loop timer restores the close prompt even then.
+  Timer {
+    id: restoreCloseWindow
+    interval: 0
+    onTriggered: {
+      if (!root.opened || !root.closeConfirmationOpen) return
+      // The proxy can still consider visibility requested after its native
+      // window closes. Reset that request before opening the confirmation.
+      if (!messagesWindow.visible) messagesWindow.visible = false
+      root.presentWindow()
+      keepEditingButton.forceActiveFocus()
+    }
+  }
+
+  function rememberNewMessageDraft() {
+    if (!composing) return
+    newMessageDraft = {query:recipientQuery, number:recipientNumber, body:composeMessage.text}
+  }
+
   function close() {
+    closeConfirmationOpen = false
+    newMessageDraft = null
     opened = false
     eventReadQueued = false
     historyEventPending = false
@@ -272,6 +336,7 @@ Item {
     searchText = ""
     pendingOpenTitle = ""
     pendingOpenThreadId = ""
+    pendingReadEntry = null
     attachmentPaths = ({})
     attachmentFetchUnique = ""
     attachmentFetchMode = ""
@@ -370,14 +435,26 @@ Item {
     var fetched = Model.parseConversations(text)
     historyConversations = fetched
     updateSendOperations(SendState.bindThreads(sendOperations, fetched))
+    applyPendingConversation(complete)
+  }
+
+  function applyPendingConversation(complete) {
+    if (!opened) return
     if (pendingOpenThreadId !== "" || pendingOpenTitle !== "") {
       var target = Model.findConversationByThreadId(conversations, pendingOpenThreadId)
       if (!target && pendingOpenTitle !== "")
         target = Model.findConversationByTitle(conversations, pendingOpenTitle)
       if (!target && !complete) return
+      if (target && (sending || threadProcess.running)) return
       pendingOpenThreadId = ""
       pendingOpenTitle = ""
-      if (target && !selectedConversation && !composing) openThread(target)
+      if (target) {
+        if (pendingReadEntry) {
+          pendingReadEntry.threadId = String(target.threadId)
+          pendingReadEntry.timestamp = Math.max(pendingReadEntry.timestamp, Number(target.timestamp) || 0)
+        }
+        selectThread(target)
+      } else pendingReadEntry = null
     }
   }
 
@@ -413,6 +490,8 @@ Item {
       return
     }
     var threadId = String(conversation.threadId)
+    if (pendingReadEntry && pendingReadEntry.threadId !== "" && pendingReadEntry.threadId !== threadId)
+      pendingReadEntry = null
     var changingThread = !selectedConversation
       || String(selectedConversation.threadId) !== threadId
       || String(selectedConversation.localOperationId || "") !== String(conversation.localOperationId || "")
@@ -457,6 +536,8 @@ Item {
   }
 
   function showConversations() {
+    if (sending) return
+    rememberNewMessageDraft()
     rememberDraft()
     if (readOnlyProvider) ferryMessages.cancel()
     browsingContacts = false
@@ -472,14 +553,16 @@ Item {
   }
 
   function startCompose() {
-    if (readOnlyProvider) return
+    if (readOnlyProvider || sending) return
+    if (composing) { composeMessage.forceActiveFocus(); return }
     rememberDraft()
     selectedConversation = null
     composing = true
-    recipientQuery = ""
-    recipientNumber = ""
+    replyField.text = ""
+    recipientQuery = newMessageDraft ? newMessageDraft.query : ""
+    recipientNumber = newMessageDraft ? newMessageDraft.number : ""
     error = ""
-    composeMessage.text = ""
+    composeMessage.text = newMessageDraft ? newMessageDraft.body : ""
     Qt.callLater(function() { recipientField.forceActiveFocus() })
   }
 
@@ -850,6 +933,7 @@ Item {
       root.finishSend(operationId, outcome)
       if (outcome.state === "accepted" && root.composing && composeMessage.text === root.pendingNewBody) {
         root.composing = false
+        root.newMessageDraft = null
         root.recipientQuery = ""
         root.recipientNumber = ""
         composeMessage.text = ""
@@ -1008,6 +1092,56 @@ Item {
   }
 
   Process {
+    id: readActionProcess
+    property var dismissCommand: []
+    property var seenCommand: []
+    property bool seenSucceeded: false
+    function next() {
+      if (running || root.readActions.length === 0) return
+      var action = root.readActions[0]
+      root.readActions = root.readActions.slice(1)
+      dismissCommand = action.dismiss
+      seenCommand = action.seen
+      seenSucceeded = false
+      command = action.seen
+      running = true
+    }
+    onExited: function(exitCode) {
+      if (exitCode === 0 && dismissCommand.length > 0) {
+        seenSucceeded = true
+        command = dismissCommand
+        dismissCommand = []
+        running = true
+      } else {
+        if (seenSucceeded || exitCode === 0)
+          InboxEvents.conversationRead(seenCommand[2], seenCommand[3], Number(seenCommand[4]))
+        dismissCommand = []
+        Qt.callLater(next)
+      }
+    }
+  }
+
+  function acknowledgeConversation(rows) {
+    if (!selectedConversation || rows.length === 0) return
+    var timestamp = rows.reduce(function(latest, row) {
+      var value = Number(row.timestamp)
+      return isFinite(value) ? Math.max(latest, value) : latest
+    }, 0)
+    var entry = pendingReadEntry && pendingReadEntry.threadId === loadingThreadId ? pendingReadEntry : null
+    // A cached history older than the clicked message has not shown it yet.
+    if (entry && timestamp < entry.timestamp) return
+    if (!entry && !selectedConversation.unread) return
+    var ids = entry ? entry.notificationIds : []
+    if (entry) pendingReadEntry = null
+    readActions = readActions.concat([{
+      seen: [helperPath, "mark-seen", deviceId, loadingThreadId, String(Math.round(timestamp))],
+      dismiss: ids.length ? [helperPath, "dismiss", deviceId].concat(ids) : []
+    }]).slice(-50)
+    selectedConversation = Object.assign({}, selectedConversation, {unread: false})
+    readActionProcess.next()
+  }
+
+  Process {
     id: threadProcess
     property int generation: -1
     property var result: null
@@ -1024,18 +1158,19 @@ Item {
       root.loading = false
       if (exitCode !== 0 || result === null) {
         root.error = "Could not load conversation"
+        if (root.pendingReadEntry && root.pendingReadEntry.threadId === root.loadingThreadId)
+          root.pendingReadEntry = null
       } else if (root.selectedConversation
                  && String(root.selectedConversation.threadId) === root.loadingThreadId
                  && (result.length > 0 || root.messages.length === 0)) {
         root.observeHistory(root.loadingThreadId, result)
         root.setThreadMessages(root.loadingThreadId, result)
-        // Opening a row is navigation. Only mark it seen after its history
-        // loaded successfully, and never dismiss the phone notification here.
-        if (result.length > 0 && root.selectedConversation.unread)
-          Quickshell.execDetached([root.helperPath, "mark-seen", root.deviceId,
-            root.loadingThreadId, String(Math.round(Number(root.selectedConversation.timestamp) || 0))])
+        // Acknowledge only history actually displayed, then clear the clicked
+        // SMS notification. Other phone notifications remain untouched.
+        root.acknowledgeConversation(result)
       }
       result = null
+      Qt.callLater(function() { root.applyPendingConversation(false) })
       if (root.historyEventPending) {
         root.historyEventPending = false
         messageEvents.start()
@@ -1072,7 +1207,13 @@ Item {
     minimumSize: Qt.size(Style.space(400), Style.space(420))
     // Only an explicit window close tears down history and local send state.
     // Losing focus or minimizing must leave the session alone.
-    onClosed: root.close()
+    onClosed: {
+      if (root.hasUnsentDrafts) {
+        implicitWidth = width
+        implicitHeight = height
+      }
+      root.requestClose()
+    }
 
     Item {
       id: keyCatcher
@@ -1081,7 +1222,7 @@ Item {
       Keys.onEscapePressed: {
         if (root.viewerOpen) root.closeViewer()
         else if (root.selectedConversation || root.composing || root.browsingContacts) root.showConversations()
-        else root.close()
+        else root.requestClose()
       }
       Keys.onPressed: function(event) {
         if ((!root.selectedConversation || root.wideLayout) && !root.composing && (event.key === Qt.Key_Slash
@@ -1114,6 +1255,7 @@ Item {
 
         RowLayout {
           anchors.fill: parent
+          enabled: !root.closeConfirmationOpen
           spacing: 0
           Rectangle {
             Layout.preferredWidth: root.wideLayout ? Style.space(300) : -1
@@ -1167,7 +1309,7 @@ Item {
                   tooltipText: qsTr("Close Messages")
                   foreground: root.foreground
                   fontFamily: root.fontFamily
-                  onClicked: root.close()
+                  onClicked: root.requestClose()
                 }
               }
               Text {
@@ -1430,7 +1572,7 @@ Item {
                   tooltipText: qsTr("Close. Clears local activity; submitted sends may still finish.")
                   foreground: root.foreground
                   fontFamily: root.fontFamily
-                  onClicked: root.close()
+                  onClicked: root.requestClose()
                 }
               }
 
@@ -2028,7 +2170,8 @@ Item {
 
                   Button {
                     fontSize: root.bodySize - 1
-                    text: "Cancel"
+                    text: "Back"
+                    tooltipText: qsTr("Keep this draft and return to conversations")
                     enabled: !root.sending
                     foreground: root.foreground
                     fontFamily: root.readingFontFamily
@@ -2122,7 +2265,7 @@ Item {
                 : root.selectedConversation
                 ? "Enter to send · Shift+Enter for a new line"
                 : root.composing
-                ? "Choose a synced contact or enter a phone number · Esc to cancel"
+                ? "Choose a contact or enter a number · Esc keeps your draft"
                 : root.filteredConversations.length + " of " + root.conversations.length
                 + " conversations · / search · PgUp/PgDn · Home/End"
                 color: root.dim
@@ -2135,6 +2278,81 @@ Item {
           }
         }
       }
+      FocusScope {
+        id: draftClosePrompt
+        objectName: "draftClosePrompt"
+        anchors.fill: parent
+        visible: root.closeConfirmationOpen
+        z: 100
+        Keys.onEscapePressed: root.keepEditing()
+        Rectangle { anchors.fill: parent; color: Qt.rgba(0, 0, 0, 0.45) }
+        MouseArea { anchors.fill: parent }
+        Rectangle {
+          anchors.centerIn: parent
+          width: Math.min(Style.space(390), parent.width - Style.space(32))
+          height: closePromptContent.implicitHeight + Style.space(40)
+          radius: Style.space(16)
+          color: root.windowBackground
+          border.width: 1
+          border.color: root.separator
+          ColumnLayout {
+            id: closePromptContent
+            anchors.fill: parent
+            anchors.margins: Style.space(20)
+            spacing: Style.space(18)
+            Text {
+              Layout.fillWidth: true
+              text: qsTr("Keep your drafts?")
+              textFormat: Text.PlainText
+              color: root.foreground
+              font.family: root.readingFontFamily
+              font.pixelSize: 22
+              font.bold: true
+            }
+            Text {
+              Layout.fillWidth: true
+              text: qsTr("Closing clears your unsent drafts. Keep editing, or discard them and close.")
+              textFormat: Text.PlainText
+              wrapMode: Text.Wrap
+              color: root.dim
+              font.family: root.readingFontFamily
+              font.pixelSize: root.bodySize - 1
+            }
+            RowLayout {
+              Layout.fillWidth: true
+              spacing: Style.space(8)
+              Button {
+                id: keepEditingButton
+                objectName: "keepEditingDrafts"
+                Layout.fillWidth: true
+                text: qsTr("Keep editing")
+                fontFamily: root.readingFontFamily
+                fontSize: root.labelSize
+                foreground: root.foreground
+                bordered: true
+                focusable: true
+                KeyNavigation.tab: discardDraftsButton
+                KeyNavigation.backtab: discardDraftsButton
+                onClicked: root.keepEditing()
+              }
+              Button {
+                id: discardDraftsButton
+                objectName: "discardDrafts"
+                Layout.fillWidth: true
+                text: qsTr("Discard and close")
+                fontFamily: root.readingFontFamily
+                fontSize: root.labelSize
+                foreground: root.foreground
+                focusable: true
+                KeyNavigation.tab: keepEditingButton
+                KeyNavigation.backtab: keepEditingButton
+                onClicked: root.close()
+              }
+            }
+          }
+        }
+      }
+
       Rectangle {
         visible: root.viewerOpen
         anchors.fill: parent
