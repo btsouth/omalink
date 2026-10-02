@@ -69,6 +69,11 @@ lifecycle behavior. Inspect the
 affected UI in omabox as well, including keyboard navigation and both light and
 dark themes. A successful CI job does not imply these checks ran.
 
+The inbox navigation fixture covers acknowledgment after a successful thread
+load, fresh incoming messages reusing a notification ID, already-open thread
+routing and retained drafts. Rejected launches, failed or stale history,
+ambiguous senders and notification dismissal failures keep the entry available.
+
 The Messages window test exercises real Hyprland tiling, focus, floating,
 resizing, pinning, per-conversation draft retention and close/reopen cleanup.
 It keeps a draft and local send record through two scheduled history refreshes

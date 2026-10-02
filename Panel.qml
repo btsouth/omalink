@@ -7,10 +7,13 @@ import qs.Commons
 import qs.Ui
 import "Model.js" as Model
 import "NotificationPolicy.js" as NotificationPolicy
+import "InboxEvents.js" as InboxEvents
 
 Panel {
   id: root
   moduleName: "omalink.phone"
+  Component.onCompleted: InboxEvents.subscribe(root)
+  Component.onDestruction: InboxEvents.unsubscribe(root)
   // Per-screen target: with one bar per monitor, identical targets collide and
   // only one panel stays reachable, so popup clicks open the wrong monitor.
   readonly property var panelWindow: QsWindow.window
@@ -265,6 +268,7 @@ Panel {
       if (deviceId === root.activePhoneId) root.refreshUnreadCached()
     }
     function onPhoneEvent() {
+      root.refreshSeen()
       root.refreshUnreadCached()
       // A text's notification can arrive just before the message itself.
       unreadFollowUp.restart()
@@ -284,6 +288,14 @@ Panel {
     seenProcess.generation = selectionGeneration
     seenProcess.command = [phone.helperPath, "seen", activePhoneId]
     seenProcess.running = true
+  }
+
+  function conversationRead(deviceId, threadId, timestamp) {
+    if (deviceId !== activePhoneId) return
+    var updated = Object.assign({}, seenMap)
+    updated[threadId] = Math.max(Number(updated[threadId]) || 0, timestamp)
+    seenMap = updated
+    phone.refresh()
   }
 
   function markSeenEntries(conversations) {
@@ -328,8 +340,10 @@ Panel {
 
   function openMessageEntry(entry) {
     if (!entry) return false
-    return openMessages(entry.notificationOnly
-      ? {conversationHint: Model.conversationTitle(entry)} : {threadId: entry.threadId})
+    var payload = entry.notificationOnly
+      ? {conversationHint: Model.conversationTitle(entry)} : {threadId: entry.threadId}
+    payload.readEntry = {timestamp: entry.timestamp, notificationIds: entry.notificationIds || []}
+    return openMessages(payload)
   }
 
   Process {
@@ -366,7 +380,14 @@ Panel {
     onExited: if (!current && root.opened) Qt.callLater(root.refreshSeen)
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: if (seenProcess.current) root.seenMap = Model.parseSeen(text)
+      onStreamFinished: {
+        if (!seenProcess.current) return
+        var updated = Model.parseSeen(text)
+        // An in-flight read must not undo a newer acknowledgment.
+        for (var key in root.seenMap)
+          updated[key] = Math.max(Number(updated[key]) || 0, Number(root.seenMap[key]) || 0)
+        root.seenMap = updated
+      }
     }
   }
 
@@ -374,7 +395,7 @@ Panel {
     interval: 10000
     repeat: true
     running: root.opened
-    onTriggered: root.refreshUnread()
+    onTriggered: { root.refreshSeen(); root.refreshUnread() }
   }
 
   Service {

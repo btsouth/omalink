@@ -19,6 +19,15 @@ command=args[0]
 if command in ['mark-seen','dismiss']:
  with (root/'actions').open('a') as stream: stream.write(json.dumps(args)+'\n')
 now=int(time.time()*1000)
+if (root/'persist-read-state').exists():
+ if command=='mark-seen':
+  seen=json.loads((root/'seen.json').read_text()) if (root/'seen.json').exists() else {}
+  seen[args[2]]=int(args[3])
+  (root/'seen.json').write_text(json.dumps(seen))
+ elif command=='dismiss':
+  if (root/'fail-dismiss').exists(): sys.exit(1)
+  (root/'dismissed').write_text('yes')
+ if (root/'epoch').exists(): now=int((root/'epoch').read_text())
 rows=[{'body':'Are we still meeting for lunch?','timestamp':now-300000,'incoming':True,'attachments':[]},
       {'body':'Yes! I can be there at noon.','timestamp':now-240000,'incoming':False,'attachments':[]},
       {'body':'Perfect, see you there.','timestamp':now-60000,'incoming':True,'attachments':[]}]
@@ -34,6 +43,8 @@ if (root/'rich').exists():
   ('Got it. Walking over now!',False,120000)]
  rows=[{'body':body,'timestamp':now-age,'incoming':incoming,'attachments':[]} for body,incoming,age in samples]
 if (root/'sent.json').exists(): rows+=json.loads((root/'sent.json').read_text())
+if (root/'stale-history').exists() and command=='messages':
+ for row in rows: row['timestamp']-=120000
 thread={'threadId':7,'names':['Alex'],'addresses':['+15550000001'],
  'preview':rows[-1]['body'],'timestamp':rows[-1]['timestamp'],'incoming':rows[-1]['incoming'],'unread':True}
 notif={'id':'notif.1','appName':'Messages','packageName':'com.google.android.apps.messaging','title':'Alex',
@@ -42,7 +53,7 @@ if command=='status':
  capabilities={key:{'state':'available','reason':'loaded','supported':True,'loaded':True,'enabled':True,'permission':'unknown','plugin':{'messaging':'kdeconnect_sms','notifications':'kdeconnect_notifications','sharing':'kdeconnect_share','ring':'kdeconnect_findmyphone'}[key]}
   for key in ['messaging','notifications','sharing','ring']}
  device={'id':'fixture','name':'Test phone','type':'phone','paired':True,'reachable':True,'connectionState':'ready',
-  'capabilities':capabilities,'battery':{'charge':72,'charging':False},'notifications':[notif],
+  'capabilities':capabilities,'battery':{'charge':72,'charging':False},'notifications':[] if (root/'dismissed').exists() else [notif],
   'notificationSources':{'examined':1,'scanTruncated':False,'permitted':1,'hidden':0,'listed':1,'unidentified':0,
     'apps':[{'key':'pkg:com.google.android.apps.messaging','appName':'Messages','packageName':notif['packageName'],
        'count':1,'permitted':True,'sourceAllowed':True}]},'media':None}
@@ -50,6 +61,9 @@ if command=='status':
    'backend':{'name':'kdeconnect','available':True,'version':'26.08.1','versionSource':'kdeconnect-cli'},'devices':[device]}))
 elif command in ['conversations','conversations-cached']:
  threads=[thread]
+ if (root/'ambiguous').exists():
+  thread['unread']=False
+  threads.append(dict(thread, threadId=8, addresses=['+15550000002']))
  if (root/'rich').exists():
   thread['names']=['Alex Morgan']
   thread['preview']='Got it. Walking over now!'
@@ -64,7 +78,7 @@ elif command=='messages':
  time.sleep(0.2)
  if (root/'fail-history').exists(): sys.exit(1)
  print(json.dumps(rows))
-elif command=='seen': print('{}')
+elif command=='seen': print((root/'seen.json').read_text() if (root/'seen.json').exists() else '{}')
 elif command=='contacts':
  print(json.dumps([{'name':name,'number':'+1555000000'+str(i+1)} for i,name in enumerate(['Alex Morgan','Maya Patel','Dana Lee','Jules Rivera'])]) if (root/'rich').exists() else '[]')
 elif command in ['watch','watch-messages']: time.sleep(3600)

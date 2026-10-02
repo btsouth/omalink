@@ -212,6 +212,8 @@ exact sender match combines them; an ambiguous sender stays visible separately.
 A notification can appear before its SMS history is available. Other app
 notifications keep their own section. Clearing an inbox row clears OmaLink's
 local unread state and requests dismissal of associated phone notifications.
+Opening a row does the same after its matching conversation loads successfully.
+Failed loads and histories older than the clicked message leave the row available.
 
 A request distinguishes submission, backend acceptance, history observation,
 and an unknown outcome. A successful helper call means acceptance, not delivery.

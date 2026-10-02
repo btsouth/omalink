@@ -5,6 +5,8 @@
 - Polish the phone dropdown with larger text, avatar rows and grouped settings.
 - Keep new-message drafts and recipients while navigating, and protect unsent
   drafts when closing the Messages window.
+- Clear a clicked message from the dropdown after its thread loads, and open
+  the requested thread when Messages is already open.
 
 ## 0.5.0 - 2026-10-01
 

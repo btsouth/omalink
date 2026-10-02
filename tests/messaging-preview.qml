@@ -122,6 +122,7 @@ ShellRoot {
       return JSON.stringify({panelOpen: panel.opened, messagesOpen: messages.opened,
         threadId: messages.selectedConversation ? messages.selectedConversation.threadId : null,
         rows: messages.messages.length, entries: panel.messageEntries.length, error: messages.error,
+        loading:messages.loading, readingHistory:messages.readingHistory,
         notificationOnly: panel.messageEntries.length > 0 && !!panel.messageEntries[0].notificationOnly})
     }
     function reject(value: bool): void { fakeShell.reject = value }
@@ -153,6 +154,7 @@ ShellRoot {
     }
     function clear(): void { panel.clearMessageEntries(panel.messageEntries) }
     function inbox(): void { messages.close(); panel.open() }
+    function peekInbox(): void { panel.close(); panel.open() }
     function thread(): void { bootstrapPanel.stop(); panel.close(); messages.open('{"deviceId":"fixture","deviceName":"Test phone","threadId":7}') }
     function pending(): void {
       var operation = messages.prepareSend(messages.selectedConversation, "", "On my way!", true)
