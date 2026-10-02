@@ -1,14 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 - 2026-10-01
 
 - Follow Omarchy's clock setting for 12- or 24-hour message timestamps.
-
 - Redesign Messages with a responsive conversation sidebar, readable type,
   grouped message cards, clearer contrast and a separate reply composer.
 - Keep separate drafts while switching threads, and keep the
   latest message visible as cards wrap or the window resizes.
-
 - Open Messages as a normal desktop window that can tile, float, resize and stay
   open alongside other apps. Bring an existing window forward without losing
   its current conversation or draft, and clear local state on explicit close.
