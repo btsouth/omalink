@@ -44,6 +44,7 @@ omabox run -- bash tests/selection-runtime.test.sh
 omabox run -- bash tests/refresh-runtime.test.sh
 omabox run -- bash tests/message-events-runtime.test.sh
 omabox run -- bash tests/messaging-navigation.test.sh
+omabox run -- bash tests/messages-window.test.sh
 omabox run -- bash tests/mfa-runtime.test.sh
 omabox run -- bash tests/send-runtime.test.sh
 omabox run -- bash tests/provider-runtime.test.sh
@@ -67,6 +68,23 @@ notification rule parity and stale-status suppression, QML loading, and
 lifecycle behavior. Inspect the
 affected UI in omabox as well, including keyboard navigation and both light and
 dark themes. A successful CI job does not imply these checks ran.
+
+The Messages window test exercises real Hyprland tiling, focus, floating,
+resizing, pinning, per-conversation draft retention and close/reopen cleanup.
+It keeps a draft and local send record through two scheduled history refreshes
+with a synthetic phone. Minimize requests may be ignored by Hyprland; the test checks that requesting one does
+not clear the session. Draft checks cover thread switches, the five-draft bound
+and cleanup on close. It does not establish an hours-long soak or phone delivery.
+
+For a realistic visual fixture:
+
+```sh
+omabox run -d -- env OMALINK_PREVIEW_RICH=1 bash tests/messaging-preview.sh
+```
+
+This adds synthetic contacts, multi-day messages and longer paragraphs for
+checking wide and narrow layouts. Inspect the conversation list, message history
+and compose view in both light and dark themes.
 
 ## Physical acceptance
 

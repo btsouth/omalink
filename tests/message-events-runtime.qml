@@ -7,7 +7,9 @@ ShellRoot {
   id: test
   property int step: 0
   property var historyList: null
-  property double scrollBefore: 0
+  property int anchorIndex: -1
+  property double anchorY: 0
+  property string anchorBody: ""
   property double started: Date.now()
   Plugin.Messages { id: messages }
   function check(value, text) {
@@ -40,7 +42,7 @@ ShellRoot {
         test.check(test.historyList !== null, "history list missing")
         messages.followingLatest = false
         test.historyList.contentY = 200
-        test.scrollBefore = test.historyList.contentY
+        capture.start()
         test.step++
       } else if (test.step === 3 && messages.messages.length === 81) {
         test.check(Date.now() - test.started < 4000, "new SMS waited for polling")
@@ -52,11 +54,23 @@ ShellRoot {
     }
   }
   Timer {
+    id: capture
+    interval: 150
+    onTriggered: {
+      test.anchorIndex = test.historyList.indexAt(1, test.historyList.contentY + 1)
+      var item = test.historyList.itemAtIndex(test.anchorIndex)
+      test.check(item !== null, "older-history anchor missing")
+      test.anchorY = item.mapToItem(test.historyList, 0, 0).y
+      test.anchorBody = item.modelData.body
+    }
+  }
+  Timer {
     id: settle
     interval: 500
     onTriggered: {
-      test.check(Math.abs(test.historyList.contentY - test.scrollBefore) < 2,
-        "new SMS changed the older-history scroll position: " + test.scrollBefore + " -> " + test.historyList.contentY)
+      var item = test.historyList.itemAtIndex(test.anchorIndex)
+      test.check(item !== null && item.modelData.body === test.anchorBody && Math.abs(item.mapToItem(test.historyList, 0, 0).y - test.anchorY) < 2,
+        "new SMS moved the visible older-history message: " + test.anchorY + " -> " + (item ? item.mapToItem(test.historyList, 0, 0).y : "missing"))
       console.log("omalink message event runtime tests passed")
       messages.close()
       Qt.quit()
