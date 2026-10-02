@@ -115,6 +115,7 @@ ShellRoot {
         var generation = test.phone.statusGeneration
         panel.persistSelection("abc123", "Pixel")
         test.check(test.phone.statusGeneration === generation, "unrelated setting invalidated status")
+        panel.showSettings = true
         panel.showNotificationApps = true
         test.check(test.named(panel, "notificationAppList", 0).visible, "app list not shown")
         panel.setNotificationRule("pkg:com.example.chat", "allow", "Chat")

@@ -94,6 +94,15 @@ Item {
   readonly property bool wideLayout: messagesWindow.width >= Style.space(900)
   property var replyDrafts: ({})
   property var draftOrder: []
+  property var newMessageDraft: null
+  property bool closeConfirmationOpen: false
+  readonly property bool hasUnsentDrafts: replyText.trim() !== ""
+    || composeText.trim() !== "" || recipientQuery.trim() !== ""
+    || (!composing && newMessageDraft !== null && (newMessageDraft.body.trim() !== "" || newMessageDraft.query.trim() !== ""))
+    || Object.keys(replyDrafts).some(function(key) {
+      return key !== root.draftKey(root.selectedConversation) && String(replyDrafts[key] || "").trim() !== ""
+    })
+
 
   function blend(front, back, amount) {
     return Qt.rgba(front.r * amount + back.r * (1 - amount),
@@ -127,6 +136,7 @@ Item {
 
   function selectThread(conversation) {
     if (sending || threadProcess.running) return
+    rememberNewMessageDraft()
     composing = false
     browsingContacts = false
     closeViewer()
@@ -229,7 +239,45 @@ Item {
     }
   }
 
+  function requestClose() {
+    if (!opened) return
+    if (!hasUnsentDrafts) { close(); return }
+    closeConfirmationOpen = true
+    restoreCloseWindow.restart()
+  }
+
+  function keepEditing() {
+    closeConfirmationOpen = false
+    Qt.callLater(function() {
+      if (root.composing) composeMessage.forceActiveFocus()
+      else if (root.selectedConversation) replyField.forceActiveFocus()
+      else keyCatcher.forceActiveFocus()
+    })
+  }
+
+  // Qt.callLater may wait for a render cycle after the native window hides.
+  // A zero-duration event-loop timer restores the close prompt even then.
+  Timer {
+    id: restoreCloseWindow
+    interval: 0
+    onTriggered: {
+      if (!root.opened || !root.closeConfirmationOpen) return
+      // The proxy can still consider visibility requested after its native
+      // window closes. Reset that request before opening the confirmation.
+      if (!messagesWindow.visible) messagesWindow.visible = false
+      root.presentWindow()
+      keepEditingButton.forceActiveFocus()
+    }
+  }
+
+  function rememberNewMessageDraft() {
+    if (!composing) return
+    newMessageDraft = {query:recipientQuery, number:recipientNumber, body:composeMessage.text}
+  }
+
   function close() {
+    closeConfirmationOpen = false
+    newMessageDraft = null
     opened = false
     eventReadQueued = false
     historyEventPending = false
@@ -457,6 +505,8 @@ Item {
   }
 
   function showConversations() {
+    if (sending) return
+    rememberNewMessageDraft()
     rememberDraft()
     if (readOnlyProvider) ferryMessages.cancel()
     browsingContacts = false
@@ -472,14 +522,16 @@ Item {
   }
 
   function startCompose() {
-    if (readOnlyProvider) return
+    if (readOnlyProvider || sending) return
+    if (composing) { composeMessage.forceActiveFocus(); return }
     rememberDraft()
     selectedConversation = null
     composing = true
-    recipientQuery = ""
-    recipientNumber = ""
+    replyField.text = ""
+    recipientQuery = newMessageDraft ? newMessageDraft.query : ""
+    recipientNumber = newMessageDraft ? newMessageDraft.number : ""
     error = ""
-    composeMessage.text = ""
+    composeMessage.text = newMessageDraft ? newMessageDraft.body : ""
     Qt.callLater(function() { recipientField.forceActiveFocus() })
   }
 
@@ -850,6 +902,7 @@ Item {
       root.finishSend(operationId, outcome)
       if (outcome.state === "accepted" && root.composing && composeMessage.text === root.pendingNewBody) {
         root.composing = false
+        root.newMessageDraft = null
         root.recipientQuery = ""
         root.recipientNumber = ""
         composeMessage.text = ""
@@ -1072,7 +1125,13 @@ Item {
     minimumSize: Qt.size(Style.space(400), Style.space(420))
     // Only an explicit window close tears down history and local send state.
     // Losing focus or minimizing must leave the session alone.
-    onClosed: root.close()
+    onClosed: {
+      if (root.hasUnsentDrafts) {
+        implicitWidth = width
+        implicitHeight = height
+      }
+      root.requestClose()
+    }
 
     Item {
       id: keyCatcher
@@ -1081,7 +1140,7 @@ Item {
       Keys.onEscapePressed: {
         if (root.viewerOpen) root.closeViewer()
         else if (root.selectedConversation || root.composing || root.browsingContacts) root.showConversations()
-        else root.close()
+        else root.requestClose()
       }
       Keys.onPressed: function(event) {
         if ((!root.selectedConversation || root.wideLayout) && !root.composing && (event.key === Qt.Key_Slash
@@ -1114,6 +1173,7 @@ Item {
 
         RowLayout {
           anchors.fill: parent
+          enabled: !root.closeConfirmationOpen
           spacing: 0
           Rectangle {
             Layout.preferredWidth: root.wideLayout ? Style.space(300) : -1
@@ -1167,7 +1227,7 @@ Item {
                   tooltipText: qsTr("Close Messages")
                   foreground: root.foreground
                   fontFamily: root.fontFamily
-                  onClicked: root.close()
+                  onClicked: root.requestClose()
                 }
               }
               Text {
@@ -1430,7 +1490,7 @@ Item {
                   tooltipText: qsTr("Close. Clears local activity; submitted sends may still finish.")
                   foreground: root.foreground
                   fontFamily: root.fontFamily
-                  onClicked: root.close()
+                  onClicked: root.requestClose()
                 }
               }
 
@@ -2028,7 +2088,8 @@ Item {
 
                   Button {
                     fontSize: root.bodySize - 1
-                    text: "Cancel"
+                    text: "Back"
+                    tooltipText: qsTr("Keep this draft and return to conversations")
                     enabled: !root.sending
                     foreground: root.foreground
                     fontFamily: root.readingFontFamily
@@ -2122,7 +2183,7 @@ Item {
                 : root.selectedConversation
                 ? "Enter to send · Shift+Enter for a new line"
                 : root.composing
-                ? "Choose a synced contact or enter a phone number · Esc to cancel"
+                ? "Choose a contact or enter a number · Esc keeps your draft"
                 : root.filteredConversations.length + " of " + root.conversations.length
                 + " conversations · / search · PgUp/PgDn · Home/End"
                 color: root.dim
@@ -2135,6 +2196,81 @@ Item {
           }
         }
       }
+      FocusScope {
+        id: draftClosePrompt
+        objectName: "draftClosePrompt"
+        anchors.fill: parent
+        visible: root.closeConfirmationOpen
+        z: 100
+        Keys.onEscapePressed: root.keepEditing()
+        Rectangle { anchors.fill: parent; color: Qt.rgba(0, 0, 0, 0.45) }
+        MouseArea { anchors.fill: parent }
+        Rectangle {
+          anchors.centerIn: parent
+          width: Math.min(Style.space(390), parent.width - Style.space(32))
+          height: closePromptContent.implicitHeight + Style.space(40)
+          radius: Style.space(16)
+          color: root.windowBackground
+          border.width: 1
+          border.color: root.separator
+          ColumnLayout {
+            id: closePromptContent
+            anchors.fill: parent
+            anchors.margins: Style.space(20)
+            spacing: Style.space(18)
+            Text {
+              Layout.fillWidth: true
+              text: qsTr("Keep your drafts?")
+              textFormat: Text.PlainText
+              color: root.foreground
+              font.family: root.readingFontFamily
+              font.pixelSize: 22
+              font.bold: true
+            }
+            Text {
+              Layout.fillWidth: true
+              text: qsTr("Closing clears your unsent drafts. Keep editing, or discard them and close.")
+              textFormat: Text.PlainText
+              wrapMode: Text.Wrap
+              color: root.dim
+              font.family: root.readingFontFamily
+              font.pixelSize: root.bodySize - 1
+            }
+            RowLayout {
+              Layout.fillWidth: true
+              spacing: Style.space(8)
+              Button {
+                id: keepEditingButton
+                objectName: "keepEditingDrafts"
+                Layout.fillWidth: true
+                text: qsTr("Keep editing")
+                fontFamily: root.readingFontFamily
+                fontSize: root.labelSize
+                foreground: root.foreground
+                bordered: true
+                focusable: true
+                KeyNavigation.tab: discardDraftsButton
+                KeyNavigation.backtab: discardDraftsButton
+                onClicked: root.keepEditing()
+              }
+              Button {
+                id: discardDraftsButton
+                objectName: "discardDrafts"
+                Layout.fillWidth: true
+                text: qsTr("Discard and close")
+                fontFamily: root.readingFontFamily
+                fontSize: root.labelSize
+                foreground: root.foreground
+                focusable: true
+                KeyNavigation.tab: keepEditingButton
+                KeyNavigation.backtab: keepEditingButton
+                onClicked: root.close()
+              }
+            }
+          }
+        }
+      }
+
       Rectangle {
         visible: root.viewerOpen
         anchors.fill: parent

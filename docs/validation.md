@@ -74,7 +74,9 @@ resizing, pinning, per-conversation draft retention and close/reopen cleanup.
 It keeps a draft and local send record through two scheduled history refreshes
 with a synthetic phone. Minimize requests may be ignored by Hyprland; the test checks that requesting one does
 not clear the session. Draft checks cover thread switches, the five-draft bound
-and cleanup on close. It does not establish an hours-long soak or phone delivery.
+and cleanup on close. New-message text and recipient survive navigation; native
+close offers Keep editing or Discard and close when any unsent draft remains.
+The close guard also covers mouse and keyboard controls. It does not establish an hours-long soak or phone delivery.
 
 For a realistic visual fixture:
 

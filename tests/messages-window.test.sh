@@ -131,14 +131,32 @@ done
 select_thread 15
 await_state '.threadId == 15 and .drafts == 5 and .draft == ""'
 
+# New-message recipients and text survive both inbox and thread navigation.
+ipc composeDraft '+15550000002' 'Unsent new message'
+ipc conversations
+await_state '(.composing | not) and .savedCompose.body == "Unsent new message"'
+select_thread 7
+await_state '.threadId == 7'
+ipc compose
+await_state '.composing and .composeBody == "Unsent new message" and .recipient == "+15550000002"'
+# Native close protects cached reply drafts and the current new-message draft.
 dispatch "hl.dsp.window.close({ window = '$selector' })"
-await_state '(.opened | not) and (.visible | not) and .draft == "" and .rows == 0 and .operations == 0 and .caches == 0 and .drafts == 0'
+await_state '.opened and .visible and .closePrompt and .composeBody == "Unsent new message" and .drafts == 5'
+ipc keepEditing
+await_state '.opened and (.closePrompt | not) and .composeBody == "Unsent new message"'
+ipc requestClose
+await_state '.closePrompt'
+ipc discardDrafts
+await_state '(.opened | not) and (.visible | not) and .draft == "" and .rows == 0 and .operations == 0 and .caches == 0 and .drafts == 0 and .savedCompose == null and (.closePrompt | not)'
 await_client '[.[] | select(.title == "OmaLink Messages")] | length == 0'
 ipc thread
 await_state '.opened and .visible and .threadId == 7 and .rows == 3'
 await_client '[.[] | select(.title == "OmaLink Messages")] | length == 1'
+# A clean session closes directly, without a draft warning.
+dispatch "hl.dsp.window.close({ window = 'title:^(OmaLink Messages)$' })"
+await_state '(.opened | not) and (.closePrompt | not) and (.hasDrafts | not)'
 if rg -q 'ReferenceError|TypeError|SyntaxError|Unable to assign|FAIL:' "$work/log"; then
   cat "$work/log"
   exit 1
 fi
-echo 'Messages window tests passed: tiling, focus, repeated summons, resize, pinning, refresh cycles and close/reopen cleanup'
+echo 'Messages window tests passed: window controls, refresh, draft retention, native-close guard and cleanup'

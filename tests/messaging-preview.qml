@@ -73,7 +73,8 @@ ShellRoot {
       return JSON.stringify({opened: messages.opened, draft: messages.replyText,
         generation: messages.generation, composing: messages.composing, followingLatest: messages.followingLatest,
         threadId: messages.selectedConversation ? messages.selectedConversation.threadId : null,
-        rows: messages.messages.length, operations: messages.sendOperations.length,
+        composeBody:messages.composeText, recipient:messages.recipientQuery, savedCompose:messages.newMessageDraft,
+        closePrompt:messages.closeConfirmationOpen, hasDrafts:messages.hasUnsentDrafts, rows: messages.messages.length, operations: messages.sendOperations.length,
         caches: Object.keys(messages.messageCache).length, drafts: Object.keys(messages.replyDrafts).length, wide: messages.wideLayout,
         visible: window ? window.visible : false, minimized: window ? window.minimized : false})
     }
@@ -82,6 +83,17 @@ ShellRoot {
       return messages.selectedConversation !== null && messages.selectedConversation.threadId === threadId
     }
     function compose(): void { messages.startCompose() }
+    function composeDraft(number: string, body: string): void {
+      messages.startCompose()
+      messages.recipientQuery = number
+      messages.recipientNumber = number
+      messages.composeText = body
+    }
+    function requestClose(): void { messages.requestClose() }
+    function keepEditing(): void { messages.keepEditing() }
+    function discardDrafts(): void { messages.close() }
+    function settings(): void { panel.showSettings = !panel.showSettings }
+
     function conversations(): void { messages.showConversations() }
     function older(): void {
       var list = fixture.findItem(fixture.messageWindow().contentItem, "messageHistoryList")
