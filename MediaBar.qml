@@ -1,6 +1,7 @@
 import QtQuick
 import qs.Commons
 
+import qs.Commons as Commons
 // Compact slider for the OmaLink media section: a thin track with a small
 // knob, sized for the panel's dense rows. PanelSlider is built for the audio
 // panel's taller rows; this keeps seek and volume to ~14px each. Applies
@@ -15,8 +16,8 @@ Item {
   property real maximum: 1
   property real step: 1
   property bool integer: false
-  property color trackColor: bar ? Style.selectedFillFor(bar.foreground, Color.accent) : "#333"
-  property color fillColor: bar ? bar.foreground : Color.foreground
+  property color trackColor: bar ? Style.selectedFillFor(bar.foreground, Commons.Color.accent) : "#333"
+  property color fillColor: bar ? bar.foreground : Commons.Color.foreground
   property bool dragging: false
   property real liveValue: value
 

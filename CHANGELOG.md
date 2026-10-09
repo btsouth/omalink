@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.2 - 2026-10-08
+
+- Colors work again on Qt 6.12. QtQuick now ships its own `Color` type, which hid the
+  shell's `Color` palette and left colors undefined. The plugin reads it as
+  `Commons.Color`, the same change Omarchy made for its own shell.
+
 ## 0.5.1 - 2026-10-01
 
 - Polish the phone dropdown with larger text, avatar rows and grouped settings.

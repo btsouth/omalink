@@ -4,6 +4,7 @@ import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 import "NotificationPolicy.js" as NotificationPolicy
@@ -21,8 +22,8 @@ Panel {
     ? String(panelWindow.screen.name) : ""
   ipcTarget: screenName !== "" ? "omalink.phone." + screenName : "omalink.phone"
 
-  readonly property color foreground: bar ? bar.foreground : Color.foreground
-  readonly property color panelBackground: Qt.rgba(Color.popups.background.r, Color.popups.background.g, Color.popups.background.b, 1)
+  readonly property color foreground: bar ? bar.foreground : Commons.Color.foreground
+  readonly property color panelBackground: Qt.rgba(Commons.Color.popups.background.r, Commons.Color.popups.background.g, Commons.Color.popups.background.b, 1)
   readonly property color dim: mix(foreground, panelBackground, 0.72)
   readonly property color muted: mix(foreground, panelBackground, 0.8)
   readonly property string readingFontFamily: "Sans Serif"
@@ -439,7 +440,7 @@ Panel {
     width: Style.space(6)
     height: width
     radius: width / 2
-    color: Color.accent
+    color: Commons.Color.accent
   }
 
   KeyboardPanel {
@@ -484,7 +485,7 @@ Panel {
             width: Style.space(50)
             height: width
             radius: Style.space(14)
-            color: root.mix(Color.accent, root.panelBackground, 0.12)
+            color: root.mix(Commons.Color.accent, root.panelBackground, 0.12)
             Text {
               anchors.centerIn: parent
               text: "󰄜"
@@ -834,7 +835,7 @@ Panel {
               Rectangle {
                 anchors.fill: parent
                 visible: parent.artSource === ""
-                color: Style.hoverFillFor(root.foreground, Color.accent)
+                color: Style.hoverFillFor(root.foreground, Commons.Color.accent)
                 radius: Style.cornerRadius
 
                 Text {
@@ -1088,7 +1089,7 @@ Panel {
                   Layout.preferredWidth: Style.space(40)
                   Layout.preferredHeight: Style.space(40)
                   radius: Style.space(12)
-                  color: root.mix(Color.accent, root.panelBackground, 0.12)
+                  color: root.mix(Commons.Color.accent, root.panelBackground, 0.12)
                   Text {
                     anchors.centerIn: parent
                     text: root.avatarText(unreadItem.modelData)
@@ -1819,11 +1820,11 @@ Panel {
               text: phone.diagnosticsText
               readOnly: true
               selectByMouse: true
-              selectionColor: Color.accent
-              selectedTextColor: Color.background
+              selectionColor: Commons.Color.accent
+              selectedTextColor: Commons.Color.background
               background: Rectangle {
-                color: Color.background
-                border.color: Style.normalBorderFor(root.foreground, Color.accent)
+                color: Commons.Color.background
+                border.color: Style.normalBorderFor(root.foreground, Commons.Color.accent)
                 radius: Style.cornerRadius
               }
               textFormat: TextEdit.PlainText

@@ -1,11 +1,12 @@
 import QtQuick
 import qs.Commons
 
+import qs.Commons as Commons
 Item {
   id: root
 
   property int strength: -1
-  property color activeColor: Color.foreground
+  property color activeColor: Commons.Color.foreground
   property color inactiveColor: Qt.rgba(activeColor.r, activeColor.g, activeColor.b, 0.22)
 
   readonly property int level: Math.max(0, Math.min(4, strength))

@@ -5,6 +5,7 @@ import QtQuick.Controls as Controls
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "FileShareModel.js" as Files
 
@@ -13,7 +14,7 @@ Item {
   property string deviceId: ""
   property string deviceName: ""
   property bool canShare: false
-  property color foreground: Color.foreground
+  property color foreground: Commons.Color.foreground
   property string fontFamily: Style.font.family
   property string helperPath: Files.localPath(Qt.resolvedUrl("bin/omalink-files").toString())
   // Native picker is preferred. Tests may use Qt's fallback without a portal.

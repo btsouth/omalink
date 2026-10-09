@@ -6,6 +6,7 @@ import Quickshell.Io
 import Quickshell.Wayland
 import Quickshell.Widgets
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 import "ProviderModel.js" as Providers
@@ -85,13 +86,13 @@ Item {
 
   readonly property string pluginDir: Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "").replace(/\/$/, "")
   readonly property string helperPath: pluginDir + "/bin/omalink"
-  readonly property color foreground: Color.foreground
-  readonly property color windowBackground: Qt.rgba(Color.background.r, Color.background.g, Color.background.b, 1)
+  readonly property color foreground: Commons.Color.foreground
+  readonly property color windowBackground: Qt.rgba(Commons.Color.background.r, Commons.Color.background.g, Commons.Color.background.b, 1)
   readonly property color dim: blend(foreground, windowBackground, 0.72)
   readonly property color separator: blend(foreground, windowBackground, 0.13)
   readonly property color sidebarBackground: blend(foreground, windowBackground, 0.035)
   readonly property color incomingBackground: blend(foreground, windowBackground, 0.07)
-  readonly property color outgoingBackground: blend(Color.accent, windowBackground, 0.15)
+  readonly property color outgoingBackground: blend(Commons.Color.accent, windowBackground, 0.15)
   readonly property string readingFontFamily: "Sans Serif"
   readonly property int bodySize: Math.max(16, Style.font.body)
   readonly property int labelSize: Math.max(13, Style.font.caption)
@@ -1381,7 +1382,7 @@ Item {
                   readonly property bool selected: root.selectedConversation !== null
                   && String(root.selectedConversation.threadId) === String(modelData.threadId)
                   border.width: activeFocus ? 1 : 0
-                  border.color: Color.accent
+                  border.color: Commons.Color.accent
                   color: selected ? root.outgoingBackground : rowMouse.containsMouse ? root.incomingBackground : "transparent"
                   radius: Style.space(12)
 
@@ -1395,7 +1396,7 @@ Item {
                       width: Style.space(42)
                       height: width
                       radius: Style.space(12)
-                      color: root.blend(Color.accent, root.sidebarBackground, 0.13)
+                      color: root.blend(Commons.Color.accent, root.sidebarBackground, 0.13)
 
                       Text {
                         anchors.centerIn: parent
@@ -1412,7 +1413,7 @@ Item {
                         anchors.top: parent.top
                         anchors.margins: -Style.space(2)
                         width: Style.space(9); height: width; radius: width / 2
-                        color: Color.accent
+                        color: Commons.Color.accent
                         border.width: 2
                         border.color: root.sidebarBackground
                       }
@@ -1611,7 +1612,7 @@ Item {
                     Layout.alignment: Qt.AlignHCenter
                     width: Style.space(76); height: width; radius: Style.space(22)
                     color: root.outgoingBackground
-                    Text { anchors.centerIn: parent; text: "󰍩"; color: Color.accent; font.family: root.fontFamily; font.pixelSize: 32 }
+                    Text { anchors.centerIn: parent; text: "󰍩"; color: Commons.Color.accent; font.family: root.fontFamily; font.pixelSize: 32 }
                   }
                   Text {
                     Layout.fillWidth: true
@@ -1813,7 +1814,7 @@ Item {
                     color: modelData.incoming ? root.incomingBackground : root.outgoingBackground
                     radius: Math.max(Style.cornerRadius, Style.space(14))
                     border.width: 0
-                    border.color: Color.menu.selectedText
+                    border.color: Commons.Color.menu.selectedText
 
                     MouseArea {
                       anchors.fill: parent
@@ -1963,8 +1964,8 @@ Item {
                         ? modelData.body
                         : (bubble.attachments.length === 0 && modelData.attachmentCount > 0 ? "Attachment" : "")
                         color: root.foreground
-                        selectionColor: modelData.incoming ? Color.menu.selectedBackground : Color.popups.background
-                        selectedTextColor: Color.menu.selectedText
+                        selectionColor: modelData.incoming ? Commons.Color.menu.selectedBackground : Commons.Color.popups.background
+                        selectedTextColor: Commons.Color.menu.selectedText
                         font.family: root.readingFontFamily
                         font.pixelSize: root.bodySize
                         wrapMode: TextEdit.Wrap
@@ -2089,7 +2090,7 @@ Item {
                     width: ListView.view.width
                     height: contactRow.implicitHeight + Style.space(14)
                     color: contactMouse.containsMouse
-                    ? Style.hoverFillFor(root.foreground, Color.accent)
+                    ? Style.hoverFillFor(root.foreground, Commons.Color.accent)
                     : "transparent"
                     radius: Style.cornerRadius
 
@@ -2150,8 +2151,8 @@ Item {
                   placeholderText: root.sending ? "Sending…" : "Write a message"
                   color: root.foreground
                   placeholderTextColor: root.dim
-                  selectionColor: Color.menu.selectedBackground
-                  selectedTextColor: Color.menu.selectedText
+                  selectionColor: Commons.Color.menu.selectedBackground
+                  selectedTextColor: Commons.Color.menu.selectedText
                   font.family: root.readingFontFamily
                   font.pixelSize: root.bodySize
                   wrapMode: TextEdit.Wrap
@@ -2159,7 +2160,7 @@ Item {
                   background: Rectangle {
                     color: root.sidebarBackground
                     border.width: 1
-                    border.color: composeMessage.activeFocus ? Color.accent : root.separator
+                    border.color: composeMessage.activeFocus ? Commons.Color.accent : root.separator
                     radius: Style.space(14)
                   }
                 }
@@ -2199,7 +2200,7 @@ Item {
                 color: root.sidebarBackground
                 radius: Style.space(16)
                 border.width: 1
-                border.color: replyField.activeFocus ? root.blend(Color.accent, root.windowBackground, 0.55) : root.separator
+                border.color: replyField.activeFocus ? root.blend(Commons.Color.accent, root.windowBackground, 0.55) : root.separator
                 RowLayout {
                   id: replyRow
                   anchors.fill: parent
@@ -2220,8 +2221,8 @@ Item {
                       textFormat: TextEdit.PlainText
                       color: root.foreground
                       placeholderTextColor: root.dim
-                      selectionColor: Color.menu.selectedBackground
-                      selectedTextColor: Color.menu.selectedText
+                      selectionColor: Commons.Color.menu.selectedBackground
+                      selectedTextColor: Commons.Color.menu.selectedText
                       wrapMode: TextEdit.Wrap
                       font.family: root.readingFontFamily
                       font.pixelSize: root.bodySize

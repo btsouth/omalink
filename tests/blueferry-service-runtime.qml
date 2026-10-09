@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import QtQuick.Layouts
 import qs.Commons
+import qs.Commons as Commons
 import "." as Plugin
 ShellRoot {
   id: test
@@ -16,7 +17,7 @@ ShellRoot {
     visible: Quickshell.env("OMALINK_PREVIEW") === "card"
     width: 380
     height: 450
-    color: Color.popups.background
+    color: Commons.Color.popups.background
     ColumnLayout {
       anchors.fill: parent
       anchors.margins: 16
