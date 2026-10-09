@@ -1,12 +1,13 @@
 import QtQuick
 import QtQuick.Layouts
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 ColumnLayout {
   id: root
   required property var service
-  property color foreground: Color.foreground
+  property color foreground: Commons.Color.foreground
   property string fontFamily: Style.font.family
   signal openHistory(var endpoint, string backendOwner)
   spacing: 8

@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import qs.Commons
+import qs.Commons as Commons
 import "." as Plugin
 import "ProviderModel.js" as Providers
 
@@ -58,8 +59,8 @@ ShellRoot {
   QtObject {
     id: fakeBar
     property QtObject shell: fakeShell
-    property color foreground: Color.foreground
-    property color barForeground: Color.foreground
+    property color foreground: Commons.Color.foreground
+    property color barForeground: Commons.Color.foreground
     property color urgent: "red"
     property string fontFamily: "monospace"
     property int height: 30

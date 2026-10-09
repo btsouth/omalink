@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import "." as Plugin
 
 // Synthetic data only. Interactive visual/keyboard fixture for omabox.
@@ -33,9 +34,9 @@ ShellRoot {
   QtObject {
     id: fakeBar
     property QtObject shell: fakeShell
-    property color foreground: Color.foreground
-    property color barForeground: Color.foreground
-    property color urgent: Color.urgent
+    property color foreground: Commons.Color.foreground
+    property color barForeground: Commons.Color.foreground
+    property color urgent: Commons.Color.urgent
     property string fontFamily: Style.font.family
     property int height: 30
     property int barSize: 30

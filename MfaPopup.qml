@@ -4,6 +4,7 @@ import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 Item {
@@ -118,10 +119,10 @@ Item {
             required property var modelData
             Layout.preferredWidth: Style.space(360)
             implicitHeight: content.implicitHeight + Style.space(20)
-            color: Color.popups.background
+            color: Commons.Color.popups.background
             radius: Style.cornerRadius
             border.width: 1
-            border.color: Color.foreground
+            border.color: Commons.Color.foreground
 
             ColumnLayout {
               id: content
@@ -136,7 +137,7 @@ Item {
                   Layout.fillWidth: true
                   text: qsTr("Verification code")
                   textFormat: Text.PlainText
-                  color: Color.foreground
+                  color: Commons.Color.foreground
                   font.family: Style.font.family
                   font.pixelSize: Style.font.body
                   font.bold: true
@@ -145,7 +146,7 @@ Item {
                 Button {
                   text: "✕"
                   focusable: true
-                  foreground: Color.foreground
+                  foreground: Commons.Color.foreground
                   fontFamily: Style.font.family
                   Accessible.role: Accessible.Button
                   Accessible.name: qsTr("Dismiss verification code")
@@ -161,7 +162,7 @@ Item {
                   Layout.fillWidth: true
                   text: toast.modelData.code
                   textFormat: Text.PlainText
-                  color: Color.foreground
+                  color: Commons.Color.foreground
                   font.family: Style.font.family
                   font.pixelSize: Style.font.title
                   font.bold: true
@@ -173,7 +174,7 @@ Item {
                   enabled: root.copyingId === -1 && root.copiedId !== toast.modelData.id
                   focusable: true
                   bordered: true
-                  foreground: Color.foreground
+                  foreground: Commons.Color.foreground
                   fontFamily: Style.font.family
                   Accessible.role: Accessible.Button
                   Accessible.name: qsTr("Copy verification code %1").arg(toast.modelData.code)
@@ -187,7 +188,7 @@ Item {
                 text: qsTr("Could not copy code. Try again.")
                 textFormat: Text.PlainText
                 wrapMode: Text.Wrap
-                color: Color.foreground
+                color: Commons.Color.foreground
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption
               }
