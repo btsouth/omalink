@@ -212,6 +212,8 @@ case "${*: -1}" in
     if [[ -n ${OMALINK_TEST_LONG_TITLE:-} ]]; then
       long="$(head -c 20000 /dev/zero | tr '\0' 'X')"
       printf '{"type":"s","data":"%s"}\n' "$long"
+    elif [[ -n ${OMALINK_TEST_REDACTED:-} && " $* " == *"/notif.9 "* ]]; then
+      printf '%s\n' '{"type":"s","data":"Sensitive notification content hidden"}'
     elif [[ -n ${OMALINK_TEST_MFA:-} && " $* " == *"/notif.11 "* ]]; then
       printf '%s\n' '{"type":"s","data":"Your verification code is 004219. Expires in 10 minutes."}'
     elif [[ " $* " == *"/notif.9 "* ]]; then
@@ -843,6 +845,13 @@ quiet_code_out="$(OMALINK_TEST_MFA=1 XDG_RUNTIME_DIR="$temp_dir" XDG_CONFIG_HOME
 if grep -q '^mfa ' <<<"$quiet_code_out" || [[ -s "$temp_dir/notify-send.log" ]]; then
   echo "popup-off code reached the popup" >&2; exit 1
 fi
+# Android hides texts with codes from KDE Connect. The popup says so plainly
+# instead of a generic "open OmaLink" popup with nothing to read.
+: >"$temp_dir/notify-send.log"
+redacted_out="$(OMALINK_TEST_REDACTED=1 XDG_RUNTIME_DIR="$temp_dir" XDG_CONFIG_HOME="$temp_dir/xdg" \
+  PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" watch)"
+[[ $redacted_out == "$watch_out" ]]
+grep -q 'Text hidden by your phone Android hid it, likely a code. Check your phone.' "$temp_dir/notify-send.log"
 : >"$temp_dir/notify-send.log"
 if PATH="$temp_dir:/usr/bin" "$project_dir/bin/omalink" --popups names status >/dev/null 2>&1; then
   echo "an unknown popup mode was accepted" >&2; exit 1

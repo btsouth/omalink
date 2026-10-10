@@ -21,6 +21,9 @@ from an already-running BlueFerry backend.
   code in a short-lived popup with a Copy code button. Copy marks the clipboard
   sensitive so Omarchy clipboard history skips it. Notification popups set to
   Off suppress these popups too
+- Android 15 and newer hide texts that contain one-time codes from KDE
+  Connect, so the code never reaches the computer. OmaLink shows "Text hidden
+  by your phone" for those instead of a blank message
 - One Messages inbox combines unread texts and their SMS notifications, even when the phone
   redacts notification contents; click one to open its conversation
 - Clear unread messages from the panel (KDE Connect cannot mark conversations
