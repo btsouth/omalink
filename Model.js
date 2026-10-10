@@ -478,14 +478,16 @@ function notificationDisplayTitle(notification) {
   if (!notification) return ""
   var title = String(notification.title || "")
   if (title !== "") return title
-  if (notification.isConversation) return "New message"
+  if (notification.isConversation)
+    return redactedNotification(notification) ? "Hidden text" : "New message"
   return String(notification.appName || "")
 }
 
 function notificationDisplayText(notification) {
   if (!notification) return ""
   if (redactedNotification(notification))
-    return notification.isConversation ? "" : "Content hidden by the phone"
+    return notification.isConversation ? "Android hid it, likely a code. Check your phone."
+      : "Content hidden by the phone"
   return String(notification.text || "")
 }
 

@@ -775,6 +775,13 @@ handle_posted() {
   if [[ -z $title && -z $text && -z $app_name ]]; then
     return 0
   fi
+  # Android 15 and newer hide texts with one-time codes from KDE Connect, so
+  # the code never reaches this computer. Say so instead of a blank popup.
+  if [[ $text == "Sensitive notification content hidden"* ]] && message_notification "$notification_path" "$package_name"; then
+    timeout --kill-after=1s 10s notify-send -a OmaLink -- "Text hidden by your phone" \
+      "Android hid it, likely a code. Check your phone." >/dev/null 2>&1 || true
+    return 0
+  fi
   # The shell renders MFA popups itself so they have a real Copy code button.
   # Only the short code goes over the watcher's private stdout pipe. Neither
   # the message nor the code is put in a child process argument or a log.
