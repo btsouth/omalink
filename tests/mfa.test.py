@@ -62,6 +62,7 @@ class MfaDetection(unittest.TestCase):
                 self.assertEqual(mfa.extract_notification(message), expected)
         self.assertIsNone(mfa.extract_notification("Authenticator\n123456"))
         self.assertIsNone(mfa.extract_notification("98626\nYour order shipped"))
+        self.assertIsNone(mfa.extract_notification("Promo code\nYour code is 123456"))
 
     def test_private_stdin_contract(self):
         result = subprocess.run([sys.executable, str(SCRIPT)], input=b"Your code is 004219",

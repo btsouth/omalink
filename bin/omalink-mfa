@@ -41,6 +41,9 @@ def extract_notification(text):
     # The watcher sends the title, a newline, then the text. A short-code
     # sender such as "98626" is a code-shaped number itself, so the text is
     # read alone first and the title only adds context when that finds nothing.
+    # A promo or redaction marker in the title still rules the text out.
+    if REDACTED.search(text) or NON_AUTH.search(text):
+        return None
     _, _, body = text.partition("\n")
     return extract(body) or extract(text)
 
