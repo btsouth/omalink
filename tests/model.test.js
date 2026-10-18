@@ -235,6 +235,9 @@ inbox = model.messageInbox([],[sms])
 assert.equal(inbox.messages[0].notificationOnly,true,"notification appears before SMS history")
 assert.equal(inbox.messages[0].preview,"new")
 assert.equal(model.messageInbox([becca,{...becca,threadId:8}],[sms]).messages.length,3,"ambiguous names stay visible")
+inbox = model.messageInbox([becca],[{...sms,id:"sms2",title:"98626",text:"216772 is your code"}])
+assert.equal(inbox.messages[0].notificationOnly,true,"a text history has not synced yet goes above older unread")
+assert.equal(inbox.messages[1].threadId,7)
 assert.equal(model.messageInbox([becca],[{...sms,packageName:""}]).notifications.length,1,"unknown transport stays visible")
 
 assert.equal(model.findConversationByTitle([becca,{...becca,threadId:8}], "Becca"), null,

@@ -37,6 +37,17 @@ def extract(text):
     return re.sub(r"[ -]", "", candidate.group())
 
 
+def extract_notification(text):
+    # The watcher sends the title, a newline, then the text. A short-code
+    # sender such as "98626" is a code-shaped number itself, so the text is
+    # read alone first and the title only adds context when that finds nothing.
+    # A promo or redaction marker in the title still rules the text out.
+    if REDACTED.search(text) or NON_AUTH.search(text):
+        return None
+    _, _, body = text.partition("\n")
+    return extract(body) or extract(text)
+
+
 def main():
     raw = sys.stdin.buffer.read(10_001)
     if len(raw) > 10_000:
@@ -45,7 +56,7 @@ def main():
         text = raw.decode("utf-8", "strict")
     except UnicodeDecodeError:
         return 1
-    code = extract(text)
+    code = extract_notification(text)
     if not code:
         return 1
     sys.stdout.write(code + "\n")

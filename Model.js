@@ -503,6 +503,7 @@ function messageInbox(unread, notifications) {
     return Object.assign({}, row, {notificationIds: []})
   })
   var other = []
+  var live = []
   ;(notifications || []).forEach(function(notification) {
     if (!smsNotification(notification)) { other.push(notification); return }
     var needle = String(notification.title || "").trim().toLowerCase()
@@ -515,12 +516,14 @@ function messageInbox(unread, notifications) {
     if (matches.length === 1) {
       matches[0].notificationIds.push(notification.id)
     } else {
-      messages.push({threadId: null, names: [notificationDisplayTitle(notification)],
+      live.push({threadId: null, names: [notificationDisplayTitle(notification)],
         preview: notificationDisplayText(notification), timestamp: 0,
         notificationOnly: true, notificationIds: [notification.id]})
     }
   })
-  return {messages: messages, notifications: other}
+  // A text the phone still shows but history has not synced yet is newer than
+  // every unread thread, so it goes first rather than under older history.
+  return {messages: live.concat(messages), notifications: other}
 }
 
 function unreadConversations(conversations) {
