@@ -49,12 +49,29 @@ class MfaDetection(unittest.TestCase):
             with self.subTest(message=message[:80]):
                 self.assertIsNone(mfa.extract(message))
 
+    def test_short_code_sender_title(self):
+        # Texts from short codes have a code-shaped sender as their title.
+        cases = {
+            "98626\n216772 is your Amazon OTP. Do not share it with anyone.": "216772",
+            "83356\nYour Apple Account Code is: 537538. Don't share it with anyone.": "537538",
+            "Your verification code\n482913": "482913",
+            "Microsoft Authenticator\nYour code: 349871": "349871",
+        }
+        for message, expected in cases.items():
+            with self.subTest(message=message):
+                self.assertEqual(mfa.extract_notification(message), expected)
+        self.assertIsNone(mfa.extract_notification("Authenticator\n123456"))
+        self.assertIsNone(mfa.extract_notification("98626\nYour order shipped"))
+
     def test_private_stdin_contract(self):
         result = subprocess.run([sys.executable, str(SCRIPT)], input=b"Your code is 004219",
                                 capture_output=True, check=False)
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout, b"004219\n")
         self.assertEqual(result.stderr, b"")
+        result = subprocess.run([sys.executable, str(SCRIPT)], input=b"98626\nCode is 216772",
+                                capture_output=True, check=False)
+        self.assertEqual(result.stdout, b"216772\n")
         result = subprocess.run([sys.executable, str(SCRIPT)], input=b"Hello", capture_output=True)
         self.assertEqual(result.returncode, 1)
         self.assertEqual(result.stdout, b"")
